@@ -117,10 +117,12 @@ check('stopped job reads as stalled', brief(await board()).includes('T:stalled')
 
 check('purge deletes an archived job', (await act('purge', 'R')).body.ok === true)
 check('purged files are gone', !(await exists(join(state, 'R.json'))) && (await readdir(join(state, 'archive'))).filter((n) => n.startsWith('R-')).length === 0)
-check('forget drops the definition', (await act('forget', 'R')).body.ok === true)
-check('forgotten id is gone from the list', !(await readFile(tasks, 'utf8')).includes('"R"'))
-check('forgotten id is gone from the board', !brief(await board('?removed=1')).includes('R:'))
-check('purge clears a stalled job', (await act('purge', 'T')).body.ok === true && !(await exists(join(state, 'T.json'))))
+check('purged id leaves the task list', !(await readFile(tasks, 'utf8')).includes('"R"'))
+check('purged id leaves the board', !brief(await board('?removed=1')).includes('R:'))
+check('forget drops the definition only', (await act('forget', 'T')).body.ok === true)
+check('forgotten id leaves the list and keeps its state', !(await readFile(tasks, 'utf8')).includes('"T"') && (await exists(join(state, 'T.json'))))
+check('forgotten id leaves the board', !brief(await board('?removed=1')).includes('T:'))
+check('purge refuses a forgotten id', (await act('purge', 'T')).body.ok === false)
 
 const page = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
 let entry = null

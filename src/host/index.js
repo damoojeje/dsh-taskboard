@@ -421,9 +421,13 @@ async function purgeTask(id) {
     delete dismissed[id]
     await writeDismissed(dismissed)
   }
+  // Delete means the job is gone, not reset. Drop the definition too, otherwise
+  // the card comes back as queued and the board looks like nothing happened.
+  delete defs[id]
+  await writeTasks(defs)
   return {
     ok: true,
-    message: `deleted ${id} (${deleted} file(s)); the task definition stays, so it can run again`,
+    message: `deleted ${id}: ${deleted} file(s) removed and the task is no longer declared`,
     deleted,
   }
 }

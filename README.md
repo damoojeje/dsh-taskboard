@@ -16,7 +16,7 @@ a status script. This puts that window in the sidebar.
 | Live log | `Open log` tails the agent log, refreshed every two seconds, scrolled to the end. |
 | Actions | `Start`, `Stop`, `Restart`, each behind a confirmation row that names the token cap. |
 | Archive | `Remove` a finished job. Its state is archived and the card hidden; `Show removed` and `Restore` bring it back. |
-| Delete | `Delete` an archived job for good: state, archive and logs. `Forget` also drops the task definition. Both are permanent and both ask first. |
+| Delete | `Delete` an archived job for good: its state, archive, logs and its place in the task list. `Forget` drops only the definition and keeps the files. Both are permanent and both ask first. |
 | Updates | Polls the host every five seconds. A phase change is marked `new` for two minutes and announced with `aria-live`. |
 
 ## Install

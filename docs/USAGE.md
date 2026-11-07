@@ -53,12 +53,12 @@ What each action calls:
   and the id is recorded in `dismissed.json`. The card disappears.
 - `restore` moves the newest archive for that id back to `<id>.json` and clears the
   dismissal.
-- `purge` is the real delete. For an archived job, or a finished one, it removes
-  `<id>.json`, `<id>.log`, `<id>.runner.log`, `<id>.accept.log` and every archived state
-  for that id. The task definition stays, so the job can run again later. Refused while
-  the job is running.
-- `forget` removes the id from `tasks.json` atomically, so the card disappears for good.
-  Logs stay unless you purge first. Refused while the job is running.
+- `purge` is the real delete, and it is what the `Delete` button calls. It removes
+  `<id>.json`, `<id>.log`, `<id>.runner.log`, `<id>.accept.log`, every archived state for
+  that id, and the id itself from `tasks.json`, so the card does not come back as a
+  fresh `queued` job. Refused while the job is running.
+- `forget` is the lighter option: it removes the id from `tasks.json` and leaves the
+  state and logs in place. Use it when you want the card gone but the evidence kept.
 
 ## The log
 
@@ -81,9 +81,10 @@ has no log yet, the card says so instead of showing an empty box.
   A.runner.log            runner output from a panel start
 ```
 
-Removal never deletes anything. `Delete` is the destructive action, and it asks first
-with the exact consequence. To remove a job and its definition, use `Delete` then
-`Forget`; to keep the definition for a later run, use `Delete` alone.
+Removal never deletes anything. `Delete` is the destructive action: it deletes the job
+and its place in the task list, and it asks first with the exact consequence. `Forget`
+drops only the definition and keeps the files, for the case where you want the card gone
+but the logs kept.
 
 ## Recovery
 

@@ -4,6 +4,17 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] 2026-11-07
+
+### Fixed
+
+- `Delete` looked like it only cleared a job: it removed the files but kept the task
+  definition, so the card came straight back as a `queued` job. It now removes the
+  definition as well, so the card is gone. `Forget` remains the lighter action that
+  drops only the definition and keeps the files.
+- The Delete confirmation now says exactly that: files, logs and its place in the task
+  list, cannot be undone.
+
 ## [0.4.0] 2026-11-07
 
 ### Added
