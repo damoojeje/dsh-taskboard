@@ -13,7 +13,7 @@ fi
 tmp="$(mktemp -t dsh-taskboard.XXXXXX.cjs.js)"
 trap 'rm -f "$tmp"' EXIT
 
-"$ESBUILD" src/client.jsx \
+"$ESBUILD" src/client/index.jsx \
   --bundle \
   --format=cjs \
   --platform=browser \

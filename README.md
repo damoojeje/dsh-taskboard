@@ -15,7 +15,8 @@ a status script. This puts that window in the sidebar.
 | Board | One card per dispatch: phase, start or finish time, elapsed against the wall clock cap, tokens against the token cap, branch, last commit, acceptance verdict. |
 | Live log | `Open log` tails the agent log, refreshed every two seconds, scrolled to the end. |
 | Actions | `Start`, `Stop`, `Restart`, each behind a confirmation row that names the token cap. |
-| Archive | `Remove` a finished job. Its state is archived and the card hidden; `Show removed` and `Restore` bring it back. Nothing is deleted. |
+| Archive | `Remove` a finished job. Its state is archived and the card hidden; `Show removed` and `Restore` bring it back. |
+| Delete | `Delete` an archived job for good: state, archive and logs. `Forget` also drops the task definition. Both are permanent and both ask first. |
 | Updates | Polls the host every five seconds. A phase change is marked `new` for two minutes and announced with `aria-live`. |
 
 ## Install
@@ -28,11 +29,15 @@ git clone https://github.com/damoojeje/dsh-taskboard.git
 cd dsh-taskboard
 npm install
 npm run build
-dsh plugin --profile web add file:"$PWD"
+dsh plugin --profile web add link:"$PWD"
 ```
 
 Then reload the Web app. A restart of `dsh web` is the certain path. A plugin toggle on
 the Plugins page applies through HMR on most builds.
+
+Use `link:` rather than `file:` while developing. pnpm caches and hardlinks a `file:`
+dependency, so later edits to the checkout are not visible until a reinstall; a `link:`
+dependency is a symlink and picks up every edit.
 
 The published package ships a built `lib/client.js`, so `npm install` and
 `npm run build` are only needed when you change the client source.
@@ -120,6 +125,17 @@ Guards: only ids declared in `tasks.json` are accepted; `start` is refused while
 declared pid is alive; `remove` is refused for a live job and for a phase that is not
 finished; `stop` signals the runner and every process it spawned.
 
+## Project layout
+
+```
+src/host/index.js     host half, loaded from source
+src/client/index.jsx  client source
+lib/client.js         built browser bundle, committed
+tests/smoke.mjs       host and bundle checks, temporary directories only
+scripts/wrap.cjs      CommonJS to module loader factory
+docs/                 usage and architecture
+```
+
 ## Development
 
 ```bash
@@ -131,18 +147,17 @@ npm test           # smoke test: host routes and bundle registration in temp dir
 Run `npm test` before you open a pull request. It uses a fake runner and temporary
 directories, so it never touches a real dispatch.
 
-After rebuilding, copy the host half into the installed profile before reloading. pnpm
-hardlinks a `file:` dependency, and a rewritten `lib/index.js` becomes a new inode, so
-the installed copy silently keeps the old code. Symptom: a new route answers 404.
-
-```bash
-cp lib/index.js lib/client.js ~/.dsh/profiles/web/node_modules/dsh-taskboard/lib/
-```
+With a `link:` install there is no copy step. With a `file:` install, pnpm hardlinks the
+package and a rewritten host file becomes a new inode, so the installed copy silently
+keeps the old code. Symptom: a new route answers 404. Reinstall, or copy the host file
+into the profile.
 
 ## Documentation
 
-- [docs/USAGE.md](docs/USAGE.md): day to day use, states, actions, archive layout and recovery.
+- [docs/USAGE.md](docs/USAGE.md): day to day use, states, actions, archive and delete, recovery.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the two halves, slots, routes, process control and limits.
+- [ROADMAP.md](ROADMAP.md): the review, what is next and the technical debt.
+- [CHANGELOG.md](CHANGELOG.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Compatibility
 

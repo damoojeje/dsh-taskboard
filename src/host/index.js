@@ -11,7 +11,7 @@
 // server does not allow.
 
 import { existsSync } from 'node:fs'
-import { readFile, readdir, rename, mkdir, stat } from 'node:fs/promises'
+import { readFile, readdir, rename, mkdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { open } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
@@ -372,6 +372,82 @@ async function restoreTask(id) {
   return { ok: true, message: `restored ${id}${restored ? ' from its archived state' : ' (no archived state)'}` }
 }
 
+async function writeTasks(defs) {
+  const config = await readJson(TASKS_FILE, { tasks: {} })
+  config.tasks = defs
+  const path = `${TASKS_FILE}.tmp`
+  await writeFile(path, JSON.stringify(config, null, 2) + '\n')
+  await rename(path, TASKS_FILE)
+}
+
+/** Delete a finished job entirely: state, archive and logs. Cannot be undone. */
+async function purgeTask(id) {
+  const defs = await taskDefs()
+  if (!Object.prototype.hasOwnProperty.call(defs, id)) {
+    return { ok: false, message: `unknown task ${id}` }
+  }
+  const state = await readJson(join(STATE_DIR, `${id}.json`), {})
+  const { phase, running } = effectivePhase(state)
+  if (running) return { ok: false, message: `${id} is running; stop it before deleting` }
+  const dismissed = await readDismissed()
+  const removed = Object.prototype.hasOwnProperty.call(dismissed, id)
+  if (!removed && !TERMINAL.includes(phase)) {
+    return { ok: false, message: `${id} is ${phase}, not finished; nothing to delete` }
+  }
+
+  const targets = [
+    join(STATE_DIR, `${id}.json`),
+    join(STATE_DIR, `${id}.log`),
+    join(STATE_DIR, `${id}.runner.log`),
+    join(STATE_DIR, `${id}.accept.log`),
+  ]
+  try {
+    const archived = (await readdir(ARCHIVE_DIR)).filter((name) => name.startsWith(`${id}-`) && name.endsWith('.json'))
+    for (const name of archived) targets.push(join(ARCHIVE_DIR, name))
+  } catch {
+    // No archive yet.
+  }
+
+  let deleted = 0
+  for (const path of targets) {
+    try {
+      await unlink(path)
+      deleted += 1
+    } catch {
+      // Already gone.
+    }
+  }
+  if (removed) {
+    delete dismissed[id]
+    await writeDismissed(dismissed)
+  }
+  return {
+    ok: true,
+    message: `deleted ${id} (${deleted} file(s)); the task definition stays, so it can run again`,
+    deleted,
+  }
+}
+
+/** Remove the task definition, so the id stops appearing on the board at all. */
+async function forgetTask(id) {
+  const defs = await taskDefs()
+  if (!Object.prototype.hasOwnProperty.call(defs, id)) {
+    return { ok: false, message: `unknown task ${id}` }
+  }
+  const state = await readJson(join(STATE_DIR, `${id}.json`), {})
+  const { running } = effectivePhase(state)
+  if (running) return { ok: false, message: `${id} is running; stop it before forgetting` }
+
+  delete defs[id]
+  await writeTasks(defs)
+  const dismissed = await readDismissed()
+  if (Object.prototype.hasOwnProperty.call(dismissed, id)) {
+    delete dismissed[id]
+    await writeDismissed(dismissed)
+  }
+  return { ok: true, message: `forgot ${id}; it is no longer declared in the task list` }
+}
+
 function jsonResponse(body, status) {
   return new Response(JSON.stringify(body), {
     status: status || 200,
@@ -441,6 +517,8 @@ export function apply(ctx) {
           }
           if (action === 'remove') return jsonResponse(await removeTask(id))
           if (action === 'restore') return jsonResponse(await restoreTask(id))
+          if (action === 'purge') return jsonResponse(await purgeTask(id))
+          if (action === 'forget') return jsonResponse(await forgetTask(id))
           return jsonResponse({ ok: false, message: `unknown action ${action}` }, 400)
         } catch (error) {
           return jsonResponse({ ok: false, message: String((error && error.message) || error) }, 500)

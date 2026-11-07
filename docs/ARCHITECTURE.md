@@ -9,7 +9,7 @@ package.json  dsh.bundle.patch   -> cordis.patch.yml -> host row  -> lib/index.j
 
 ## Host half
 
-`lib/index.js` is an ordinary Cordis plugin: `name`, `inject: ['connection']`, and
+`src/host/index.js` is an ordinary Cordis plugin: `name`, `inject: ['connection']`, and
 `apply(ctx)`. It registers three exact fetch routes on the connection's `/api` handler
 and reads the dispatch files. It keeps no state of its own beyond the archive and
 `dismissed.json`.
@@ -20,9 +20,10 @@ Reads on every snapshot, in order:
 2. one `<id>.json` per id, for phase, pid, timestamps, tokens and acceptance;
 3. `dismissed.json`, to decide which cards are hidden.
 
-It writes only for `remove` and `restore`: a state file moves into `archive/`, and
-`dismissed.json` records or drops the id. The write is atomic: a temporary file in the
-same directory, then a rename.
+It writes only for the archive and delete actions: a state file moves into `archive/`,
+`dismissed.json` records or drops the id, `purge` unlinks the job files, and `forget`
+rewrites `tasks.json`. Every write is atomic: a temporary file in the same directory,
+then a rename.
 
 Process control uses `/proc`: a pid is alive when `kill(pid, 0)` succeeds, and a stop
 walks `/proc/<pid>/stat` to build the descendant tree before signalling. That tree
@@ -84,6 +85,8 @@ and never invents a command. The runner remains the only writer of dispatch stat
 - Ids must match the declared task list; anything else is a 400.
 - `start` refuses when the declared pid is alive.
 - `remove` refuses when the job is live or its phase is not finished.
+- `purge` and `forget` refuse while the job is running; `purge` also refuses a phase that
+  is not finished.
 - `stop` signals the whole tree, not just the runner.
 
 ## Limits
@@ -102,11 +105,13 @@ and never invents a command. The runner remains the only writer of dispatch stat
 ```
 package.json          plugin manifest: bundle patch, client declaration, scripts
 cordis.patch.yml      inserts the host row
-lib/index.js          host half (shipped, no build needed)
-lib/client.js         built client bundle (shipped)
-src/client.jsx        client source
+src/host/index.js     host half, loaded from source, no build step
+src/client/index.jsx  client source
+lib/client.js         built client bundle, committed
 build.sh              esbuild plus scripts/wrap.cjs
 scripts/wrap.cjs      CommonJS to module-loader factory
-scripts/smoke.mjs     host routes and bundle registration, temp dirs only
+tests/smoke.mjs       host routes and bundle registration, temp dirs only
 docs/                 this file and USAGE.md
+ROADMAP.md            review, next steps, technical debt
+CHANGELOG.md          release notes
 ```

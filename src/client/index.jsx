@@ -167,6 +167,7 @@ function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onCo
         <span style={styles.taskTitle}>{task.title}</span>
         {fresh ? <span style={styles.fresh}>new</span> : null}
         {task.removed ? <span style={styles.chip}>removed</span> : null}
+        {task.removed ? <span style={styles.meta}>Delete removes the files for good.</span> : null}
       </div>
 
       <div style={styles.row}>
@@ -226,14 +227,32 @@ function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onCo
           {open ? 'Hide log' : 'Open log'}
         </button>
         {task.removed ? (
-          <button
-            type="button"
-            style={{ ...styles.button, ...styles.buttonPrimary, opacity: acting ? 0.5 : 1 }}
-            onClick={() => onAsk(task.id, 'restore')}
-            disabled={acting}
-          >
-            Restore
-          </button>
+          <>
+            <button
+              type="button"
+              style={{ ...styles.button, ...styles.buttonPrimary, opacity: acting ? 0.5 : 1 }}
+              onClick={() => onAsk(task.id, 'restore')}
+              disabled={acting}
+            >
+              Restore
+            </button>
+            <button
+              type="button"
+              style={{ ...styles.button, opacity: acting ? 0.5 : 1 }}
+              onClick={() => onAsk(task.id, 'purge')}
+              disabled={acting}
+            >
+              Delete
+            </button>
+            <button
+              type="button"
+              style={{ ...styles.button, opacity: acting ? 0.5 : 1 }}
+              onClick={() => onAsk(task.id, 'forget')}
+              disabled={acting}
+            >
+              Forget
+            </button>
+          </>
         ) : canStart ? (
           <>
             <button
@@ -280,9 +299,13 @@ function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onCo
       {pending && pending.id === task.id ? (
         <div style={styles.row} role="alertdialog" aria-label={`Confirm ${pending.action} ${task.id}`}>
           <span style={styles.meta}>
-            {pending.action} {task.id}? {pending.action === 'stop' ? 'The agent is terminated.' : pending.action === 'remove' ? 'Its state is archived and hidden; the task definition and logs stay.' : pending.action === 'restore' ? 'It comes back on the board with its last archived state.' : `It runs against a ${tokens(task.cap)} token cap.`}
+            {pending.action} {task.id}? {pending.action === 'stop' ? 'The agent is terminated.' : pending.action === 'remove' ? 'Its state is archived and hidden; the task definition and logs stay.' : pending.action === 'purge' ? 'Deletes its state, archive and logs. Cannot be undone.' : pending.action === 'forget' ? 'Drops the task definition; logs stay unless you delete first.' : pending.action === 'restore' ? 'It comes back on the board with its last archived state.' : `It runs against a ${tokens(task.cap)} token cap.`}
           </span>
-          <button type="button" style={{ ...styles.button, ...styles.buttonPrimary }} onClick={() => onConfirm(task.id, pending.action)}>
+          <button
+            type="button"
+            style={{ ...styles.button, ...(pending.action === 'purge' || pending.action === 'forget' ? styles.buttonDanger : styles.buttonPrimary) }}
+            onClick={() => onConfirm(task.id, pending.action)}
+          >
             Yes, {pending.action}
           </button>
           <button type="button" style={styles.button} onClick={onCancel}>

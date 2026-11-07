@@ -3,11 +3,13 @@
 // temporary directory and the runner is a fake that writes a state file and
 // sleeps. Exits non-zero on the first failed expectation.
 
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, access } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
+
+const exists = async (path) => access(path).then(() => true, () => false)
 
 const root = await mkdtemp(join(tmpdir(), 'taskboard-smoke-'))
 const state = join(root, 'state')
@@ -53,7 +55,7 @@ process.env.TASKBOARD_STATE = state
 process.env.TASKBOARD_TASKS = tasks
 process.env.TASKBOARD_RUNNER = runner
 
-const { apply } = await import('../lib/index.js')
+const { apply } = await import('../src/host/index.js')
 
 const routes = new Map()
 apply({
@@ -107,10 +109,18 @@ check('start spawns the runner', started.body.ok === true, started.body.message)
 await new Promise((resolve) => setTimeout(resolve, 900))
 check('runner reports running', (await board()).tasks.find((t) => t.id === 'T').running === true)
 check('duplicate start is refused', (await act('start', 'T')).body.ok === false)
+check('purge refuses a running job', (await act('purge', 'T')).body.ok === false)
 check('log route answers', (await call('/api/taskboard/log?id=T', 'GET')).status === 200)
 check('stop ends it', (await act('stop', 'T')).body.ok === true)
 await new Promise((resolve) => setTimeout(resolve, 900))
 check('stopped job reads as stalled', brief(await board()).includes('T:stalled'))
+
+check('purge deletes an archived job', (await act('purge', 'R')).body.ok === true)
+check('purged files are gone', !(await exists(join(state, 'R.json'))) && (await readdir(join(state, 'archive'))).filter((n) => n.startsWith('R-')).length === 0)
+check('forget drops the definition', (await act('forget', 'R')).body.ok === true)
+check('forgotten id is gone from the list', !(await readFile(tasks, 'utf8')).includes('"R"'))
+check('forgotten id is gone from the board', !brief(await board('?removed=1')).includes('R:'))
+check('purge clears a stalled job', (await act('purge', 'T')).body.ok === true && !(await exists(join(state, 'T.json'))))
 
 const page = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
 let entry = null

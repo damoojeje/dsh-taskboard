@@ -30,6 +30,7 @@ The header counts running jobs and the total on the board.
 | `capped` | The token or wall clock cap ended it. | `Open log`, `Start`, `Remove` |
 | `failed` | Acceptance failed. | `Open log`, `Start`, `Remove` |
 | `done` | Acceptance passed. | `Open log`, `Start`, `Remove` |
+| removed | Archived, hidden by default. `Show removed` reveals it. | `Open log`, `Restore`, `Delete`, `Forget` |
 
 `Start` on a finished job runs it again. `Restart` stops a running job and starts it
 again in one step, with no gap in the card.
@@ -52,6 +53,12 @@ What each action calls:
   and the id is recorded in `dismissed.json`. The card disappears.
 - `restore` moves the newest archive for that id back to `<id>.json` and clears the
   dismissal.
+- `purge` is the real delete. For an archived job, or a finished one, it removes
+  `<id>.json`, `<id>.log`, `<id>.runner.log`, `<id>.accept.log` and every archived state
+  for that id. The task definition stays, so the job can run again later. Refused while
+  the job is running.
+- `forget` removes the id from `tasks.json` atomically, so the card disappears for good.
+  Logs stay unless you purge first. Refused while the job is running.
 
 ## The log
 
@@ -74,9 +81,9 @@ has no log yet, the card says so instead of showing an empty box.
   A.runner.log            runner output from a panel start
 ```
 
-Removal never deletes the log or the acceptance output. To clear a task completely,
-restore it, then delete its files while the panel is not showing it, or start it again
-and let the runner rewrite the state.
+Removal never deletes anything. `Delete` is the destructive action, and it asks first
+with the exact consequence. To remove a job and its definition, use `Delete` then
+`Forget`; to keep the definition for a later run, use `Delete` alone.
 
 ## Recovery
 
