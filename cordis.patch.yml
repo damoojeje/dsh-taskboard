@@ -1,0 +1,6 @@
+# Bundle patch: the host half reads the dispatch state and serves it on an exact
+# /api route. The browser half is declared by package.json `dsh.client` and served
+# from ./lib/client.js.
+- insert:
+    - id: taskboard
+      name: dsh-taskboard
