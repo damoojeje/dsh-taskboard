@@ -13,63 +13,56 @@ until it lands in a release.
 | 0.3 | Remove as archive, show removed, restore |
 | 0.4.1 | Real delete (purge removes the job and its definition), forget, tests, CI, project layout |
 
+## Shipped in 0.5.0
+
+| Capability | Note |
+|---|---|
+| Filter and sections | Text filter over id, title, branch, phase. Active and Finished, Finished collapsible. |
+| Staleness warning | A running job whose state file is older than ten minutes says so on the card. |
+| Rate and estimate | Tokens per minute over a ten minute window, and an estimate to the cap. |
+| Copy actions | Copy the branch, or the log tail while it is open. |
+| Persisted state | Filter, show removed, finished collapsed, open log and the notification choice survive a refresh. |
+| Visibility pause | The stream and the log poll stop while the tab is hidden and resume on return. |
+| Batch actions | Stop all running, archive every finished job, one confirmation each. |
+| Retention | `TASKBOARD_RETENTION_DAYS` prunes archives on host load. |
+| Keyboard | `Escape` closes a confirmation first, then the log. |
+| Push | Server sent events at `/api/taskboard/events`, polling as the fallback. |
+| Chain context | A child card names its parent and the parent phase. |
+
 ## Next
 
-1. **Filter and sections.** Split the board into Active and Finished, collapse Finished
-   by default, and add a text filter over id, title and branch. Twenty cards are already
-   hard to scan, and a board that holds a day of dispatches will be worse. Effort: small.
-2. **Staleness warning.** The runner writes the state file on its own cadence. When a
-   job is `running` and the state file has not changed for, say, ten minutes, the card
-   should say "no runner update in 12m", because that is what a hung agent looks like
-   before you notice the token line has stopped. Effort: small.
-3. **Rate and estimate.** Tokens per minute over the last interval, an estimate of time
-   to the token cap, and the wall clock remaining. The percentage alone hides whether a
-   job is moving. Effort: small, needs two samples kept in the panel.
-4. **Copy actions.** Copy the last 50 log lines, the branch, or the worktree path. A log
-   that cannot be pasted elsewhere is half useful. Effort: small.
-5. **Persisted panel state.** Remember the open log and the show removed toggle in
-   `localStorage`, so a refresh does not reset the view. Effort: small.
-6. **Poll when hidden only.** Pause the five second poll while `document.hidden`, refresh
-   once on visibility change. This is battery and, on a busy host, real work. Effort:
-   small.
-7. **Batch actions.** Stop all running, and prune every finished card, with one
-   confirmation that names the count. Effort: medium, mostly care around partial failure.
-8. **Retention policy.** An optional setting to purge archives older than N days, run on
-   host load. Keeps `archive/` from growing without bound. Effort: small.
-9. **Escape and focus.** `Escape` closes a confirmation or the log, focus returns to the
-   button that opened it. Accessibility polish. Effort: small.
+Nothing here is urgent. These need a product decision rather than code.
+
+1. **Restart with a different cap.** The runner reads caps from the task list, so a one
+   off override needs a runner change, not a panel change. Decide whether the panel may
+   write a per run cap and how the runner reads it.
+2. **Multi host.** Aggregating a feed from more than one machine changes the threat
+   model, so it needs an explicit setting and a review of what an exposed route means.
+3. **Portable process control.** `/proc` and POSIX signals are Linux only. The board and
+   log already work everywhere; the actions need a platform adapter, tested on a real
+   macOS and Windows host before it ships.
+4. **Locale.** Labels are English strings. Adopt the Harness locale service once the
+   interface stabilises.
 
 ## Later
 
-- **Push instead of poll.** The connection already carries streams. A subscription to
-  state changes would cut the poll to zero and show transitions instantly. Effort:
-  medium, needs a host stream and lifecycle care.
-- **Chain view.** Tasks declare `chain_from`. The panel could draw the chain and say
-  which parent blocks a child, instead of one line of text. Effort: medium.
-- **Desktop notification** when a job finishes, opt in, one permission prompt.
-- **Restart with a different cap.** Today a restart uses the cap in `tasks.json`. A small
-  dialog could pass a one off cap, written into the state file only.
-- **Multi host.** Read an aggregate feed from more than one machine. This changes the
-  threat model, so it belongs behind an explicit setting.
-- **Windows and macOS.** Process control uses `/proc` and POSIX signals. A platform
-  adapter over `taskkill` and `ps` would make the actions portable. The board and log
-  already work everywhere.
+- **Desktop notification polish.** Today it fires when the panel is open and permission
+  is granted. A background delivery path would need the host to know where to send it.
+- **Per task notes.** A small editable note per job, stored beside the state, useful when
+  a dispatch is paused for a reason.
 
 ## Technical debt
 
-- **pid reuse.** Liveness is `kill(pid, 0)`. A recycled pid can briefly make a dead job
-  look alive. Store the process start time from `/proc/<pid>/stat` and compare it.
-- **Tail by whole file read.** The log route reads up to 512 KiB and slices. For very
-  large logs a reverse read is cheaper. Not urgent at dispatch scale.
-- **Task list trust.** `tasks.json` is parsed without validation. A malformed file gives
-  an empty board rather than an error. A small schema check with a clear message would
-  help.
 - **State write cadence.** The panel cannot be fresher than the runner's writes. The
   staleness warning is the honest fix; anything else invents data.
-- **Loopback assumption.** The routes are owner gated by the connection, but the panel
-  assumes the Web server is not exposed. Beyond loopback needs a review, not a toggle.
-- **Locale.** Labels are English strings. The Harness client has a locale service; using
-  it would be a small refactor once the interface stabilises.
+- **Loopback assumption.** Routes are owner gated, but the panel assumes the Web server
+  is not exposed. Beyond loopback needs a review, not a toggle.
+- **pid identity uses clock ticks.** The start time comparison assumes a 100 Hz clock,
+  true on Linux. A platform adapter would carry its own rule.
+- **Rate is memory only.** Samples reset when the host restarts, so the first minutes
+  after a reload show no rate. Persisting them is not worth a file.
+- **Snapshot cost.** Every snapshot stats files and reads `/proc` per task. Fine for tens
+  of tasks; a hundred would want a cache.
 
 ## How to pick
 

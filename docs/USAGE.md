@@ -19,6 +19,40 @@ Each card shows:
 The card order is running first, then stalled, blocked, queued, capped, failed and done.
 The header counts running jobs and the total on the board.
 
+## Board controls
+
+- **Filter** matches id, title, branch and phase, case insensitively. It persists.
+- **Active** holds running, stalled, blocked and queued jobs. **Finished** holds capped,
+  failed and done jobs, and it collapses with `Hide`.
+- **Stop all (n)** terminates every running job, behind one confirmation that names the
+  count.
+- **Archive finished (n)** moves every finished job to the archive in one step.
+- **Show removed (n)** reveals archived jobs, each with Restore, Delete and Forget.
+- **Notify me** asks the browser for notification permission and announces a job that
+  finishes while the panel is open.
+- **Copy branch** and **Copy log** put the branch name or the visible log tail on the
+  clipboard.
+- `Escape` closes a confirmation first, then the open log.
+
+Filter, show removed, the finished section, the open log and the notification choice are
+kept in `localStorage`, so a refresh returns to the same view.
+
+## Diagnostics
+
+- **No runner update in Xm** appears when a running job has not written its state file
+  for ten minutes. It usually means a hung agent or a runner that died without a signal.
+- **Tokens per minute** is sampled from the snapshot stream over a ten minute window, and
+  the card estimates the time to the token cap from it. The figure is blank until two
+  samples exist, so it is empty right after a host restart.
+- A parent card is named on its child, with the parent phase, so a blocked job explains
+  itself without opening the other card.
+
+## Retention
+
+Set `TASKBOARD_RETENTION_DAYS` on the `dsh web` process to delete archived states older
+than that many days when the plugin loads. Unset means archives are kept until you delete
+them.
+
 ## States
 
 | Phase | Meaning | Actions offered |

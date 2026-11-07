@@ -60,6 +60,32 @@ The panel keeps four pieces of state: the snapshot, the set of ids that changed 
 recently, the id whose log is open, and a pending confirmation. It polls the snapshot
 every five seconds and the log every two.
 
+## Streaming
+
+`GET /api/taskboard/events` is a server sent event stream. The host sends one snapshot
+every three seconds; the browser uses `EventSource` and falls back to polling if the
+stream errors, which is where the footer's `live` or `polling` label comes from. The
+stream closes while the tab is hidden and reconnects when it returns, so a background tab
+does not poll a host for hours.
+
+## Snapshot internals
+
+- The task list is validated: ids must be a single capital letter, entries must be
+  objects, and numeric caps must be numeric. Problems appear as `warnings` on the
+  snapshot instead of an empty board with no explanation.
+- Liveness compares the process start time from `/proc/<pid>/stat` with the task's
+  `started`. A pid that predates the task by more than five seconds is a recycled pid, so
+  the job is reported as `stalled` even though the pulse check succeeds.
+- Staleness is the age of the state file while the job is running. Ten minutes without a
+  write raises the warning on the card.
+- The rate and the estimate come from in memory samples: each snapshot records tokens and
+  time per task, keeps a ten minute window, and derives tokens per minute and time to the
+  cap. The samples die with the process.
+- The log tail reads from the end of the file, never loading a whole large log. The cap is
+  512 KiB and the default window is 200 lines.
+- Archive retention deletes archived states older than `TASKBOARD_RETENTION_DAYS` when the
+  host loads the plugin.
+
 ## Data flow
 
 ```

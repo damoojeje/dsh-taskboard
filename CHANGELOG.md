@@ -4,6 +4,28 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] 2026-11-07
+
+### Added
+
+- Filter over id, title, branch and phase, Active and Finished sections, collapsible.
+- Server sent event stream at `/api/taskboard/events`, with polling as the fallback and
+  a pause while the tab is hidden.
+- Stale warning when a running job has not written its state file for ten minutes.
+- Token rate and an estimate to the cap, sampled in memory over a ten minute window.
+- Copy branch and copy log, a notification opt in on completion, persisted filter and
+  toggles, and `Escape` to close a confirmation or the log.
+- Batch actions: stop all running, archive every finished job.
+- Optional archive retention through `TASKBOARD_RETENTION_DAYS`.
+- Task list validation with visible warnings instead of a silent empty board.
+- Process identity check, so a recycled pid does not report a dead job as running.
+- Log tail read from the end of the file instead of loading the whole log.
+
+### Changed
+
+- The panel reads one snapshot feed for both the board and the removed jobs, and
+  filters locally.
+
 ## [0.4.1] 2026-11-07
 
 ### Fixed

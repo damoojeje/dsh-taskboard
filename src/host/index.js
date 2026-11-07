@@ -1,18 +1,16 @@
 // Host half: read headless dispatch state, tail a dispatch log, start or stop a
-// task through the existing runner, and archive a finished job off the board.
+// task through the existing runner, and archive or delete a job.
 //
-// Everything is scoped to the task ids declared in
-// context_master/plans/dsh-tasks/tasks.json. The plugin never invents a command:
-// start and restart call `python3 dsh-run.py <id>`, stop signals the runner and
-// the agent it spawned. Removing a finished job moves its state file into
-// ~/.dsh/tasks/archive and records the id in dismissed.json, so the task
-// definition and the logs stay; nothing is deleted. Mutating calls need the
-// x-taskboard header, which a cross-site page cannot set without a preflight the
-// server does not allow.
+// Everything is scoped to the task ids declared in the task list. The plugin
+// never invents a command: start and restart call `python3 dsh-run.py <id>`,
+// stop signals the runner and the agent it spawned. Every path is overridable so
+// the smoke test can drive the whole surface against temporary directories.
+//
+// Mutating calls need the x-taskboard header, which a cross-site page cannot set
+// without a preflight the server does not allow.
 
 import { existsSync } from 'node:fs'
-import { readFile, readdir, rename, mkdir, stat, unlink, writeFile } from 'node:fs/promises'
-import { open } from 'node:fs/promises'
+import { readFile, readdir, rename, mkdir, stat, unlink, writeFile, open } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -22,10 +20,7 @@ export const inject = ['connection']
 
 const HOME = homedir()
 
-// Every path is overridable, and the defaults look in two conventional places so
-// the plugin works in any checkout. The overrides also let the smoke test drive
-// start, stop, restart and remove against a fake runner without touching real
-// dispatches.
+// Paths look in two conventional places so the plugin works in any checkout.
 function firstExisting(candidates) {
   for (const candidate of candidates) {
     try {
@@ -55,6 +50,12 @@ const ARCHIVE_DIR = join(STATE_DIR, 'archive')
 const DISMISSED_FILE = join(STATE_DIR, 'dismissed.json')
 const MAX_LOG_BYTES = 512 * 1024
 const TERMINAL = ['done', 'failed', 'capped', 'stalled']
+const STALE_AFTER_MS = 10 * 60 * 1000
+const RATE_WINDOW_MS = 10 * 60 * 1000
+const RETENTION_DAYS = Number(process.env.TASKBOARD_RETENTION_DAYS) || 0
+
+// Per task token samples, kept in memory, used for the rate and the estimate.
+const samples = new Map()
 
 async function readJson(path, fallback) {
   try {
@@ -65,9 +66,39 @@ async function readJson(path, fallback) {
   }
 }
 
+/** Validate the task list instead of trusting it. Returns defs plus warnings. */
 async function taskDefs() {
-  const config = await readJson(TASKS_FILE, { tasks: {} })
-  return config.tasks && typeof config.tasks === 'object' ? config.tasks : {}
+  const config = await readJson(TASKS_FILE, null)
+  const warnings = []
+  if (!config) {
+    if (existsSync(TASKS_FILE)) warnings.push(`task list is not valid JSON: ${TASKS_FILE}`)
+    return { defs: {}, warnings }
+  }
+  if (!config.tasks || typeof config.tasks !== 'object') {
+    warnings.push('task list has no tasks object')
+    return { defs: {}, warnings }
+  }
+  const defs = {}
+  for (const [id, def] of Object.entries(config.tasks)) {
+    if (!/^[A-Z]$/.test(id)) {
+      warnings.push(`task id ${JSON.stringify(id)} is not a single capital letter, skipped`)
+      continue
+    }
+    if (!def || typeof def !== 'object') {
+      warnings.push(`task ${id} is not an object, skipped`)
+      continue
+    }
+    const caps = []
+    for (const key of ['token_cap', 'wall_s']) {
+      if (def[key] !== undefined && !Number.isFinite(def[key])) {
+        warnings.push(`task ${id} has a non numeric ${key}`)
+        caps.push(key)
+      }
+    }
+    defs[id] = def
+    for (const key of caps) delete defs[id][key]
+  }
+  return { defs, warnings }
 }
 
 async function readDismissed() {
@@ -78,13 +109,16 @@ async function readDismissed() {
 async function writeDismissed(value) {
   await mkdir(STATE_DIR, { recursive: true })
   const path = `${DISMISSED_FILE}.tmp`
-  const handle = await open(path, 'w')
-  try {
-    await handle.writeFile(JSON.stringify(value, null, 2))
-  } finally {
-    await handle.close()
-  }
+  await writeFile(path, JSON.stringify(value, null, 2))
   await rename(path, DISMISSED_FILE)
+}
+
+async function writeTasks(defs) {
+  const config = (await readJson(TASKS_FILE, {})) || {}
+  config.tasks = defs
+  const path = `${TASKS_FILE}.tmp`
+  await writeFile(path, JSON.stringify(config, null, 2) + '\n')
+  await rename(path, TASKS_FILE)
 }
 
 function alive(pid) {
@@ -101,35 +135,58 @@ function num(value) {
   return Number.isFinite(value) ? value : 0
 }
 
-async function latestArchive(id) {
+/** Process start time in epoch milliseconds, or null when it cannot be read. */
+async function processStartMs(pid) {
   try {
-    const files = (await readdir(ARCHIVE_DIR))
-      .filter((name) => name.startsWith(`${id}-`) && name.endsWith('.json'))
-      .sort()
-    if (files.length === 0) return null
-    return await readJson(join(ARCHIVE_DIR, files[files.length - 1]), null)
+    const raw = await readFile(`/proc/${pid}/stat`, 'utf8')
+    const fields = raw.slice(raw.lastIndexOf(')') + 2).split(' ')
+    const ticks = Number(fields[19])
+    const btime = Number((await readFile('/proc/stat', 'utf8')).match(/^btime (\d+)$/m)?.[1])
+    if (!Number.isFinite(ticks) || !Number.isFinite(btime)) return null
+    return btime * 1000 + (ticks * 1000) / 100
   } catch {
     return null
   }
 }
 
-/** A task whose runner is gone is stalled, not running, whatever the file says. */
-function effectivePhase(state) {
+/**
+ * A task whose runner is gone is stalled, whatever the file says. A pid that
+ * started well before the task did is a recycled pid, so it counts as gone too.
+ */
+async function effectivePhase(state) {
   let phase = state.state || 'queued'
   const pid = state.pid || null
   const running = alive(pid)
   if (phase === 'running' && pid && !running) phase = 'stalled'
+  if (phase === 'running' && pid && running && state.started) {
+    const startedMs = Date.parse(state.started)
+    const pidMs = await processStartMs(pid)
+    if (Number.isFinite(startedMs) && Number.isFinite(pidMs) && pidMs < startedMs - 5000) {
+      phase = 'stalled'
+    }
+  }
   return { phase, running }
 }
 
-function stamp() {
-  const now = new Date()
-  const two = (n) => String(n).padStart(2, '0')
-  return `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}-${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`
+function rateFor(id, used, cap) {
+  const now = Date.now()
+  const list = (samples.get(id) || []).filter((point) => now - point.t <= RATE_WINDOW_MS)
+  list.push({ t: now, used })
+  samples.set(id, list)
+  if (list.length < 2) return { tokensPerMinute: 0, etaSeconds: null }
+  const first = list[0]
+  const minutes = (now - first.t) / 60000
+  if (minutes <= 0) return { tokensPerMinute: 0, etaSeconds: null }
+  const perMinute = Math.max(0, (used - first.used) / minutes)
+  const remaining = cap > 0 ? Math.max(0, cap - used) : 0
+  return {
+    tokensPerMinute: Math.round(perMinute),
+    etaSeconds: perMinute > 0 && cap > 0 ? Math.round((remaining / perMinute) * 60) : null,
+  }
 }
 
-async function snapshot(showRemoved) {
-  const defs = await taskDefs()
+async function snapshot(includeRemoved) {
+  const { defs, warnings } = await taskDefs()
   const dismissed = await readDismissed()
   const ids = Object.keys(defs).sort()
   const tasks = []
@@ -137,16 +194,24 @@ async function snapshot(showRemoved) {
   for (const id of ids) {
     const def = defs[id] || {}
     const removed = Object.prototype.hasOwnProperty.call(dismissed, id)
-    if (removed && !showRemoved) continue
+    if (removed && !includeRemoved) continue
     let state = await readJson(join(STATE_DIR, `${id}.json`), {})
     if (removed && !state.state) {
       const archived = await latestArchive(id)
       if (archived) state = archived
     }
+    const statePath = join(STATE_DIR, `${id}.json`)
+    let stateAgeS = null
+    try {
+      stateAgeS = Math.round((Date.now() - (await stat(statePath)).mtimeMs) / 1000)
+    } catch {
+      stateAgeS = null
+    }
+
     const used = num(state.tokens_in) + num(state.tokens_out)
     const cap = num(state.token_cap) || num(def.token_cap)
     const wall = num(state.wall_s) || num(def.wall_s)
-    const { phase, running } = effectivePhase(state)
+    const { phase, running } = await effectivePhase(state)
     const declared = state.pid || null
 
     let elapsedS = null
@@ -158,6 +223,15 @@ async function snapshot(showRemoved) {
       }
     }
 
+    const { tokensPerMinute, etaSeconds } = running ? rateFor(id, used, cap) : { tokensPerMinute: 0, etaSeconds: null }
+    const stale = phase === 'running' && stateAgeS !== null && stateAgeS > STALE_AFTER_MS / 1000
+    const chainFrom = def.chain_from || null
+    let parent = null
+    if (chainFrom && defs[chainFrom]) {
+      const parentState = await readJson(join(STATE_DIR, `${chainFrom}.json`), {})
+      parent = { id: chainFrom, phase: (await effectivePhase(parentState)).phase }
+    }
+
     tasks.push({
       id,
       title: state.title || def.title || id,
@@ -167,6 +241,8 @@ async function snapshot(showRemoved) {
       started: state.started || null,
       finished: state.finished || null,
       elapsedS,
+      stateAgeS,
+      stale,
       wallS: wall || null,
       tokensIn: num(state.tokens_in),
       tokensOut: num(state.tokens_out),
@@ -174,6 +250,8 @@ async function snapshot(showRemoved) {
       used,
       cap,
       percent: cap > 0 ? Math.min(100, Math.round((used / cap) * 100)) : 0,
+      tokensPerMinute,
+      etaSeconds,
       branch: state.branch || def.branch || null,
       worktree: state.worktree || null,
       lastCommit: state.last_commit || null,
@@ -182,7 +260,8 @@ async function snapshot(showRemoved) {
       killed: state.killed || null,
       pid: declared,
       running,
-      chainFrom: def.chain_from || null,
+      chainFrom,
+      parent,
     })
   }
 
@@ -193,30 +272,44 @@ async function snapshot(showRemoved) {
     updatedAt: new Date().toISOString(),
     running: tasks.filter((t) => t.phase === 'running' || t.running).length,
     removedCount: Object.keys(dismissed).length,
-    showRemoved: !!showRemoved,
+    warnings,
     tasks,
   }
 }
 
+/** Read the tail of a file without loading the whole thing. */
 async function readTail(path, lines) {
-  let text = ''
+  let handle = null
   try {
-    text = await readFile(path, 'utf8')
+    handle = await open(path, 'r')
+    const { size } = await handle.stat()
+    const length = Math.min(size, MAX_LOG_BYTES)
+    const buffer = Buffer.alloc(length)
+    await handle.read(buffer, 0, length, size - length)
+    const text = buffer.toString('utf8')
+    const parts = text.split('\n')
+    const keep = Math.max(1, Math.min(1000, lines || 200))
+    if (parts.length > keep) {
+      return { text: parts.slice(-keep).join('\n'), truncated: true, missing: false }
+    }
+    return { text, truncated: size > length, missing: false }
   } catch {
     return { text: '', truncated: false, missing: true }
+  } finally {
+    if (handle) await handle.close().catch(() => {})
   }
-  let truncated = false
-  if (text.length > MAX_LOG_BYTES) {
-    text = text.slice(-MAX_LOG_BYTES)
-    truncated = true
+}
+
+async function latestArchive(id) {
+  try {
+    const files = (await readdir(ARCHIVE_DIR))
+      .filter((name) => name.startsWith(`${id}-`) && name.endsWith('.json'))
+      .sort()
+    if (files.length === 0) return null
+    return await readJson(join(ARCHIVE_DIR, files[files.length - 1]), null)
+  } catch {
+    return null
   }
-  const parts = text.split('\n')
-  const keep = Math.max(1, Math.min(1000, lines || 200))
-  if (parts.length > keep) {
-    truncated = true
-    return { text: parts.slice(-keep).join('\n'), truncated, missing: false }
-  }
-  return { text, truncated, missing: false }
 }
 
 /** Collect a process and everything it spawned. */
@@ -280,7 +373,7 @@ async function stopTask(id) {
 }
 
 async function startTask(id, action) {
-  const defs = await taskDefs()
+  const { defs } = await taskDefs()
   if (!Object.prototype.hasOwnProperty.call(defs, id)) {
     return { ok: false, message: `unknown task ${id}` }
   }
@@ -315,17 +408,47 @@ async function startTask(id, action) {
   }
 }
 
+async function stopAll() {
+  const { defs } = await taskDefs()
+  const stopped = []
+  for (const id of Object.keys(defs)) {
+    const state = await readJson(join(STATE_DIR, `${id}.json`), {})
+    if (state.pid && alive(state.pid)) {
+      const result = await stopTask(id)
+      stopped.push(`${id}:${result.ok ? 'stopped' : result.message}`)
+    }
+  }
+  return {
+    ok: true,
+    message: stopped.length ? `stopped ${stopped.join(', ')}` : 'nothing is running',
+  }
+}
+
+async function pruneFinished() {
+  const { defs } = await taskDefs()
+  const archived = []
+  for (const id of Object.keys(defs)) {
+    const state = await readJson(join(STATE_DIR, `${id}.json`), {})
+    const { phase, running } = await effectivePhase(state)
+    if (running || !TERMINAL.includes(phase)) continue
+    const result = await removeTask(id)
+    if (result.ok) archived.push(id)
+  }
+  return {
+    ok: true,
+    message: archived.length ? `archived ${archived.join(', ')}` : 'no finished job to archive',
+  }
+}
+
 /** Archive a finished job off the board. Nothing is deleted. */
 async function removeTask(id) {
-  const defs = await taskDefs()
+  const { defs } = await taskDefs()
   if (!Object.prototype.hasOwnProperty.call(defs, id)) {
     return { ok: false, message: `unknown task ${id}` }
   }
   const state = await readJson(join(STATE_DIR, `${id}.json`), {})
-  const { phase, running } = effectivePhase(state)
-  if (running) {
-    return { ok: false, message: `${id} is running; stop it before removing` }
-  }
+  const { phase, running } = await effectivePhase(state)
+  if (running) return { ok: false, message: `${id} is running; stop it before removing` }
   if (!TERMINAL.includes(phase)) {
     return { ok: false, message: `${id} is ${phase}, not finished; nothing to remove` }
   }
@@ -350,7 +473,6 @@ async function removeTask(id) {
   }
 }
 
-/** Put a removed job back on the board, restoring the last archived state. */
 async function restoreTask(id) {
   const dismissed = await readDismissed()
   if (!Object.prototype.hasOwnProperty.call(dismissed, id)) {
@@ -372,22 +494,14 @@ async function restoreTask(id) {
   return { ok: true, message: `restored ${id}${restored ? ' from its archived state' : ' (no archived state)'}` }
 }
 
-async function writeTasks(defs) {
-  const config = await readJson(TASKS_FILE, { tasks: {} })
-  config.tasks = defs
-  const path = `${TASKS_FILE}.tmp`
-  await writeFile(path, JSON.stringify(config, null, 2) + '\n')
-  await rename(path, TASKS_FILE)
-}
-
-/** Delete a finished job entirely: state, archive and logs. Cannot be undone. */
+/** Delete a finished job entirely, including its definition. Cannot be undone. */
 async function purgeTask(id) {
-  const defs = await taskDefs()
+  const { defs } = await taskDefs()
   if (!Object.prototype.hasOwnProperty.call(defs, id)) {
     return { ok: false, message: `unknown task ${id}` }
   }
   const state = await readJson(join(STATE_DIR, `${id}.json`), {})
-  const { phase, running } = effectivePhase(state)
+  const { phase, running } = await effectivePhase(state)
   if (running) return { ok: false, message: `${id} is running; stop it before deleting` }
   const dismissed = await readDismissed()
   const removed = Object.prototype.hasOwnProperty.call(dismissed, id)
@@ -421,10 +535,9 @@ async function purgeTask(id) {
     delete dismissed[id]
     await writeDismissed(dismissed)
   }
-  // Delete means the job is gone, not reset. Drop the definition too, otherwise
-  // the card comes back as queued and the board looks like nothing happened.
   delete defs[id]
   await writeTasks(defs)
+  samples.delete(id)
   return {
     ok: true,
     message: `deleted ${id}: ${deleted} file(s) removed and the task is no longer declared`,
@@ -432,14 +545,13 @@ async function purgeTask(id) {
   }
 }
 
-/** Remove the task definition, so the id stops appearing on the board at all. */
 async function forgetTask(id) {
-  const defs = await taskDefs()
+  const { defs } = await taskDefs()
   if (!Object.prototype.hasOwnProperty.call(defs, id)) {
     return { ok: false, message: `unknown task ${id}` }
   }
   const state = await readJson(join(STATE_DIR, `${id}.json`), {})
-  const { running } = effectivePhase(state)
+  const { running } = await effectivePhase(state)
   if (running) return { ok: false, message: `${id} is running; stop it before forgetting` }
 
   delete defs[id]
@@ -450,6 +562,35 @@ async function forgetTask(id) {
     await writeDismissed(dismissed)
   }
   return { ok: true, message: `forgot ${id}; it is no longer declared in the task list` }
+}
+
+/** Delete archives older than TASKBOARD_RETENTION_DAYS, when that is set. */
+async function sweepArchive() {
+  if (!(RETENTION_DAYS > 0)) return 0
+  const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000
+  let removed = 0
+  try {
+    for (const name of await readdir(ARCHIVE_DIR)) {
+      const path = join(ARCHIVE_DIR, name)
+      try {
+        if ((await stat(path)).mtimeMs < cutoff) {
+          await unlink(path)
+          removed += 1
+        }
+      } catch {
+        // Gone already.
+      }
+    }
+  } catch {
+    // No archive.
+  }
+  return removed
+}
+
+function stamp() {
+  const now = new Date()
+  const two = (n) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}-${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`
 }
 
 function jsonResponse(body, status) {
@@ -463,6 +604,8 @@ function jsonResponse(body, status) {
 }
 
 export function apply(ctx) {
+  sweepArchive().catch(() => {})
+
   const routes = [
     {
       path: '/api/taskboard/state',
@@ -470,18 +613,52 @@ export function apply(ctx) {
       requestBody: 'buffered',
       fetch: async (request) => {
         const url = new URL(request.url)
-        const showRemoved = url.searchParams.get('removed') === '1'
+        const includeRemoved = url.searchParams.get('removed') === '1'
         try {
-          return jsonResponse(await snapshot(showRemoved))
+          return jsonResponse(await snapshot(includeRemoved))
         } catch (error) {
           return jsonResponse({
             updatedAt: new Date().toISOString(),
             running: 0,
             removedCount: 0,
+            warnings: [],
             tasks: [],
             error: String((error && error.message) || error),
           })
         }
+      },
+    },
+    {
+      path: '/api/taskboard/events',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async () => {
+        const encoder = new TextEncoder()
+        let timer = null
+        const stream = new ReadableStream({
+          start(controller) {
+            const send = async () => {
+              try {
+                const payload = await snapshot(true)
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`))
+              } catch {
+                // A failed snapshot must not tear down the stream.
+              }
+            }
+            send()
+            timer = setInterval(send, 3000)
+          },
+          cancel() {
+            if (timer) clearInterval(timer)
+          },
+        })
+        return new Response(stream, {
+          headers: {
+            'content-type': 'text/event-stream',
+            'cache-control': 'no-store',
+            connection: 'keep-alive',
+          },
+        })
       },
     },
     {
@@ -511,14 +688,14 @@ export function apply(ctx) {
         } catch {
           return jsonResponse({ ok: false, message: 'body is not JSON' }, 400)
         }
-        const id = body && typeof body.id === 'string' ? body.id : ''
         const action = body && typeof body.action === 'string' ? body.action : ''
-        if (!/^[A-Z]$/.test(id)) return jsonResponse({ ok: false, message: 'bad id' }, 400)
+        const id = body && typeof body.id === 'string' ? body.id : ''
         try {
+          if (action === 'stop-all') return jsonResponse(await stopAll())
+          if (action === 'prune-finished') return jsonResponse(await pruneFinished())
+          if (!/^[A-Z]$/.test(id)) return jsonResponse({ ok: false, message: 'bad id' }, 400)
           if (action === 'stop') return jsonResponse(await stopTask(id))
-          if (action === 'start' || action === 'restart') {
-            return jsonResponse(await startTask(id, action))
-          }
+          if (action === 'start' || action === 'restart') return jsonResponse(await startTask(id, action))
           if (action === 'remove') return jsonResponse(await removeTask(id))
           if (action === 'restore') return jsonResponse(await restoreTask(id))
           if (action === 'purge') return jsonResponse(await purgeTask(id))

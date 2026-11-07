@@ -3,11 +3,12 @@
 // temporary directory and the runner is a fake that writes a state file and
 // sleeps. Exits non-zero on the first failed expectation.
 
-import { mkdtemp, mkdir, writeFile, readFile, readdir, access } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, access, utimes } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
+import { Buffer } from 'node:buffer'
 
 const exists = async (path) => access(path).then(() => true, () => false)
 
@@ -110,6 +111,15 @@ await new Promise((resolve) => setTimeout(resolve, 900))
 check('runner reports running', (await board()).tasks.find((t) => t.id === 'T').running === true)
 check('duplicate start is refused', (await act('start', 'T')).body.ok === false)
 check('purge refuses a running job', (await act('purge', 'T')).body.ok === false)
+const liveState = JSON.parse(await readFile(join(state, 'T.json'), 'utf8'))
+liveState.tokens_in += 5000
+await writeFile(join(state, 'T.json'), JSON.stringify(liveState))
+await new Promise((resolve) => setTimeout(resolve, 50))
+check('rate appears once tokens move', (await board()).tasks.find((t) => t.id === 'T').tokensPerMinute > 0)
+const old = new Date(Date.now() - 20 * 60 * 1000)
+await utimes(join(state, 'T.json'), old, old)
+check('stale warning when the state file is old', (await board()).tasks.find((t) => t.id === 'T').stale === true)
+await utimes(join(state, 'T.json'), new Date(), new Date())
 check('log route answers', (await call('/api/taskboard/log?id=T', 'GET')).status === 200)
 check('stop ends it', (await act('stop', 'T')).body.ok === true)
 await new Promise((resolve) => setTimeout(resolve, 900))
@@ -123,6 +133,39 @@ check('forget drops the definition only', (await act('forget', 'T')).body.ok ===
 check('forgotten id leaves the list and keeps its state', !(await readFile(tasks, 'utf8')).includes('"T"') && (await exists(join(state, 'T.json'))))
 check('forgotten id leaves the board', !brief(await board('?removed=1')).includes('T:'))
 check('purge refuses a forgotten id', (await act('purge', 'T')).body.ok === false)
+
+// Batch actions need a live task again; add S to the list.
+const config = JSON.parse(await readFile(tasks, 'utf8'))
+config.tasks.S = { name: 's', branch: 'dsh/s', token_cap: 1000, wall_s: 60, title: 'batch task' }
+await writeFile(tasks, JSON.stringify(config))
+check('start for the batch test', (await act('start', 'S')).body.ok === true)
+await new Promise((resolve) => setTimeout(resolve, 700))
+check('stop-all stops it', (await act('stop-all')).body.ok === true)
+await new Promise((resolve) => setTimeout(resolve, 900))
+check('stop-all left it stalled', brief(await board()).includes('S:stalled'))
+check('archive finished archives it', (await act('prune-finished')).body.ok === true)
+check('archived job is hidden by default', !brief(await board()).includes('S:'))
+
+// Validation must report a malformed entry instead of failing silently.
+const withBad = JSON.parse(await readFile(tasks, 'utf8'))
+withBad.tasks['bad id'] = { title: 'invalid' }
+await writeFile(tasks, JSON.stringify(withBad))
+check('validation warns about a bad id', (await board()).warnings.some((w) => w.includes('single capital letter')))
+delete withBad.tasks['bad id']
+await writeFile(tasks, JSON.stringify(withBad))
+
+// The event stream must deliver a snapshot frame.
+const eventsRoute = routes.get('/api/taskboard/events:GET')
+const eventResponse = await eventsRoute.fetch(new Request('http://smoke/api/taskboard/events'))
+check('event stream content type', eventResponse.headers.get('content-type') === 'text/event-stream')
+const reader = eventResponse.body.getReader()
+const first = await Promise.race([
+  reader.read(),
+  new Promise((resolve) => setTimeout(() => resolve({ done: true }), 3000)),
+])
+await reader.cancel().catch(() => {})
+const frame = first && first.value ? Buffer.from(first.value).toString('utf8') : ''
+check('event stream sends a snapshot', frame.startsWith('data: ') && frame.includes('"tasks"'))
 
 const page = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
 let entry = null

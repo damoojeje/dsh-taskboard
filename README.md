@@ -18,6 +18,11 @@ a status script. This puts that window in the sidebar.
 | Archive | `Remove` a finished job. Its state is archived and the card hidden; `Show removed` and `Restore` bring it back. |
 | Delete | `Delete` an archived job for good: its state, archive, logs and its place in the task list. `Forget` drops only the definition and keeps the files. Both are permanent and both ask first. |
 | Updates | Polls the host every five seconds. A phase change is marked `new` for two minutes and announced with `aria-live`. |
+| Filter and sections | Text filter over id, title, branch and phase. Active and Finished sections, Finished collapsible. |
+| Live stream | Server sent events push each snapshot; polling is the fallback when the stream drops. |
+| Diagnostics | Warns when a running job stops updating its state file, and shows the token rate and an estimate to the cap. |
+| Batch | Stop all running jobs, or archive every finished job, each behind one confirmation. |
+| Comforts | Copy branch or log, persisted filter and toggles, notifications on completion, `Escape` closes a confirmation or the log. |
 
 ## Install
 
@@ -99,6 +104,7 @@ All paths are overridable with environment variables on the `dsh web` process:
 | `TASKBOARD_STATE` | `~/.dsh/tasks` | Directory holding `<id>.json`, `<id>.log` and the archive. |
 | `TASKBOARD_TASKS` | first of `~/.dsh/tasks/tasks.json` or `~/context_master/plans/dsh-tasks/tasks.json` that exists | The task list. |
 | `TASKBOARD_RUNNER` | first of `~/.dsh/bin/dsh-run.py` or `~/context_master/plans/dsh-run.py` that exists | The command `Start` and `Restart` run. |
+| `TASKBOARD_RETENTION_DAYS` | unset | When set, archives older than this many days are deleted when the host loads the plugin. |
 
 `Start` and `Restart` spawn exactly `setsid python3 <TASKBOARD_RUNNER> <id>`. No command
 text comes from the browser.
@@ -114,6 +120,7 @@ connection:
 | Route | Method | Purpose |
 |---|---|---|
 | `/api/taskboard/state` | GET | Snapshot. `?removed=1` includes archived jobs. |
+| `/api/taskboard/events` | GET | Server sent event stream, one snapshot frame every three seconds. |
 | `/api/taskboard/log` | GET | `?id=A&lines=200`, the tail of the agent log. |
 | `/api/taskboard/action` | POST | `{ "id": "A", "action": "start" }` with actions `start`, `stop`, `restart`, `remove`, `restore`. |
 
