@@ -28,6 +28,10 @@ until it lands in a release.
 | Keyboard | `Escape` closes a confirmation first, then the log. |
 | Push | Server sent events at `/api/taskboard/events`, polling as the fallback. |
 | Chain context | A child card names its parent and the parent phase. |
+| Delete any phase | Queued, blocked, stalled, finished or running; a running job is stopped first. |
+| Notes | A per job note thread, removed with the job. |
+| Metrics | Jobs, pass and fail counts, tokens and cache share. |
+| Log controls | Search, tail size, follow, download, and PASS or FAIL tones. |
 
 ## Next
 
@@ -48,8 +52,6 @@ Nothing here is urgent. These need a product decision rather than code.
 
 - **Desktop notification polish.** Today it fires when the panel is open and permission
   is granted. A background delivery path would need the host to know where to send it.
-- **Per task notes.** A small editable note per job, stored beside the state, useful when
-  a dispatch is paused for a reason.
 
 ## Technical debt
 

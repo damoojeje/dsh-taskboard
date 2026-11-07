@@ -4,6 +4,24 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] 2026-11-07
+
+### Added
+
+- `Delete` works for every phase: a queued or blocked job that never started, a stalled
+  one, a finished one, and a running one, which is stopped first. The confirmation says
+  which of those it will do.
+- Per job notes, stored as `<id>.notes.jsonl` beside the state, with a read and append
+  route and a text box in the panel. Notes are removed with the job.
+- Board metrics: job count, passed and failed counts, total tokens and cache share.
+- Log controls: search the tail, pick 200, 500 or 1000 lines, follow or freeze, download,
+  and tone lines containing PASS or FAIL.
+
+### Fixed
+
+- Deleting a queued or blocked job was refused, which left declarations with no state on
+  the board with no way to clear them.
+
 ## [0.5.0] 2026-11-07
 
 ### Added

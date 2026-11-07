@@ -273,6 +273,16 @@ async function snapshot(includeRemoved) {
     running: tasks.filter((t) => t.phase === 'running' || t.running).length,
     removedCount: Object.keys(dismissed).length,
     warnings,
+    metrics: {
+      jobs: tasks.length,
+      phases: tasks.reduce((acc, t) => { acc[t.phase] = (acc[t.phase] || 0) + 1; return acc }, {}),
+      tokensIn: tasks.reduce((sum, t) => sum + t.tokensIn, 0),
+      tokensOut: tasks.reduce((sum, t) => sum + t.tokensOut, 0),
+      cacheRead: tasks.reduce((sum, t) => sum + t.cacheRead, 0),
+      cap: tasks.reduce((sum, t) => sum + t.cap, 0),
+      acceptPass: tasks.filter((t) => t.accept === 'pass').length,
+      acceptFail: tasks.filter((t) => t.accept === 'fail').length,
+    },
     tasks,
   }
 }
@@ -501,19 +511,23 @@ async function purgeTask(id) {
     return { ok: false, message: `unknown task ${id}` }
   }
   const state = await readJson(join(STATE_DIR, `${id}.json`), {})
-  const { phase, running } = await effectivePhase(state)
-  if (running) return { ok: false, message: `${id} is running; stop it before deleting` }
+  const { running } = await effectivePhase(state)
+  let stopped = false
+  if (running) {
+    const result = await stopTask(id)
+    if (!result.ok) return result
+    stopped = true
+    await sleep(300)
+  }
   const dismissed = await readDismissed()
   const removed = Object.prototype.hasOwnProperty.call(dismissed, id)
-  if (!removed && !TERMINAL.includes(phase)) {
-    return { ok: false, message: `${id} is ${phase}, not finished; nothing to delete` }
-  }
 
   const targets = [
     join(STATE_DIR, `${id}.json`),
     join(STATE_DIR, `${id}.log`),
     join(STATE_DIR, `${id}.runner.log`),
     join(STATE_DIR, `${id}.accept.log`),
+    join(STATE_DIR, `${id}.notes.jsonl`),
   ]
   try {
     const archived = (await readdir(ARCHIVE_DIR)).filter((name) => name.startsWith(`${id}-`) && name.endsWith('.json'))
@@ -540,9 +554,45 @@ async function purgeTask(id) {
   samples.delete(id)
   return {
     ok: true,
-    message: `deleted ${id}: ${deleted} file(s) removed and the task is no longer declared`,
+    message: `deleted ${id}: ${deleted} file(s) removed and the task is no longer declared${stopped ? ' (it was running, stopped first)' : ''}`,
     deleted,
+    stopped,
   }
+}
+
+function notesPath(id) {
+  return join(STATE_DIR, `${id}.notes.jsonl`)
+}
+
+/** Read the last hundred notes for a task. */
+async function readNotes(id) {
+  try {
+    const raw = await readFile(notesPath(id), 'utf8')
+    const notes = []
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const parsed = JSON.parse(line)
+        if (parsed && typeof parsed.text === 'string') notes.push({ at: parsed.at || null, text: parsed.text })
+      } catch {
+        // A damaged line does not hide the rest.
+      }
+    }
+    return notes.slice(-100)
+  } catch {
+    return []
+  }
+}
+
+/** Append one note, capped so a paste cannot grow the file forever. */
+async function addNote(id, text) {
+  const trimmed = String(text || '').trim()
+  if (!trimmed) return { ok: false, message: 'the note is empty' }
+  if (trimmed.length > 2000) return { ok: false, message: 'the note is longer than 2000 characters' }
+  await mkdir(STATE_DIR, { recursive: true })
+  const line = JSON.stringify({ at: new Date().toISOString(), text: trimmed }) + '\n'
+  await writeFile(notesPath(id), line, { flag: 'a' })
+  return { ok: true, message: 'note saved', notes: await readNotes(id) }
 }
 
 async function forgetTask(id) {
@@ -659,6 +709,30 @@ export function apply(ctx) {
             connection: 'keep-alive',
           },
         })
+      },
+    },
+    {
+      path: '/api/taskboard/notes',
+      methods: ['GET', 'POST'],
+      requestBody: 'buffered',
+      fetch: async (request) => {
+        if (request.method === 'POST' && request.headers.get('x-taskboard') !== '1') {
+          return jsonResponse({ ok: false, message: 'missing x-taskboard header' }, 403)
+        }
+        if (request.method === 'GET') {
+          const id = new URL(request.url).searchParams.get('id') || ''
+          if (!/^[A-Z]$/.test(id)) return jsonResponse({ error: 'bad id' }, 400)
+          return jsonResponse({ id, notes: await readNotes(id) })
+        }
+        let body = null
+        try {
+          body = await request.json()
+        } catch {
+          return jsonResponse({ ok: false, message: 'body is not JSON' }, 400)
+        }
+        const id = body && typeof body.id === 'string' ? body.id : ''
+        if (!/^[A-Z]$/.test(id)) return jsonResponse({ ok: false, message: 'bad id' }, 400)
+        return jsonResponse(await addNote(id, body && body.text))
       },
     },
     {

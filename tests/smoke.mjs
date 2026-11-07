@@ -75,7 +75,10 @@ const check = (label, condition, detail) => {
 }
 
 const call = async (path, method, body, headers) => {
-  const route = routes.get(`${path.split('?')[0]}:${method}`)
+  const bare = path.split('?')[0]
+  const route =
+    routes.get(`${bare}:${method}`) ||
+    [...routes.values()].find((value) => value.path === bare && value.methods.includes(method))
   if (!route) throw new Error(`route missing: ${method} ${path}`)
   const response = await route.fetch(
     new Request(`http://smoke${path}`, {
@@ -110,7 +113,6 @@ check('start spawns the runner', started.body.ok === true, started.body.message)
 await new Promise((resolve) => setTimeout(resolve, 900))
 check('runner reports running', (await board()).tasks.find((t) => t.id === 'T').running === true)
 check('duplicate start is refused', (await act('start', 'T')).body.ok === false)
-check('purge refuses a running job', (await act('purge', 'T')).body.ok === false)
 const liveState = JSON.parse(await readFile(join(state, 'T.json'), 'utf8'))
 liveState.tokens_in += 5000
 await writeFile(join(state, 'T.json'), JSON.stringify(liveState))
@@ -166,6 +168,28 @@ const first = await Promise.race([
 await reader.cancel().catch(() => {})
 const frame = first && first.value ? Buffer.from(first.value).toString('utf8') : ''
 check('event stream sends a snapshot', frame.startsWith('data: ') && frame.includes('"tasks"'))
+
+// Delete works for any phase: a queued job with no state at all.
+const queuedConfig = JSON.parse(await readFile(tasks, 'utf8'))
+queuedConfig.tasks.Q = { name: 'q', branch: 'dsh/q', token_cap: 1000, wall_s: 60, title: 'queued task' }
+await writeFile(tasks, JSON.stringify(queuedConfig))
+check('delete a queued job', (await act('purge', 'Q')).body.ok === true)
+check('queued job leaves the task list', !(await readFile(tasks, 'utf8')).includes('"Q"'))
+
+// Notes round trip, then delete a running job (it must stop first).
+await act('restore', 'S')
+check('start before the running delete', (await act('start', 'S')).body.ok === true)
+await new Promise((resolve) => setTimeout(resolve, 700))
+check('notes need the header', (await call('/api/taskboard/notes', 'POST', { id: 'S', text: 'hello' }, {})).status === 403)
+const noteSave = await call('/api/taskboard/notes', 'POST', { id: 'S', text: 'a note for the next person' }, { 'x-taskboard': '1' })
+check('note saved and returned', noteSave.body.ok === true && noteSave.body.notes.length === 1)
+const noteRead = await call('/api/taskboard/notes?id=S', 'GET')
+check('note reads back', noteRead.body.notes[0].text === 'a note for the next person')
+const runningDelete = await act('purge', 'S')
+check('delete a running job stops it first', runningDelete.body.ok === true && runningDelete.body.stopped === true)
+check('running delete removes state, notes and definition', !(await exists(join(state, 'S.json'))) && !(await exists(join(state, 'S.notes.jsonl'))) && !(await readFile(tasks, 'utf8')).includes('"S"'))
+const metrics = (await board()).metrics
+check('snapshot carries metrics', metrics && typeof metrics.tokensIn === 'number' && typeof metrics.jobs === 'number')
 
 const page = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
 let entry = null

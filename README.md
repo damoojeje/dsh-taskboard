@@ -16,13 +16,16 @@ a status script. This puts that window in the sidebar.
 | Live log | `Open log` tails the agent log, refreshed every two seconds, scrolled to the end. |
 | Actions | `Start`, `Stop`, `Restart`, each behind a confirmation row that names the token cap. |
 | Archive | `Remove` a finished job. Its state is archived and the card hidden; `Show removed` and `Restore` bring it back. |
-| Delete | `Delete` an archived job for good: its state, archive, logs and its place in the task list. `Forget` drops only the definition and keeps the files. Both are permanent and both ask first. |
+| Delete | `Delete` any job for good: its state, archive, logs and its place in the task list. A running job is stopped first. `Forget` drops only the definition and keeps the files. Both ask first. |
 | Updates | Polls the host every five seconds. A phase change is marked `new` for two minutes and announced with `aria-live`. |
 | Filter and sections | Text filter over id, title, branch and phase. Active and Finished sections, Finished collapsible. |
 | Live stream | Server sent events push each snapshot; polling is the fallback when the stream drops. |
 | Diagnostics | Warns when a running job stops updating its state file, and shows the token rate and an estimate to the cap. |
 | Batch | Stop all running jobs, or archive every finished job, each behind one confirmation. |
 | Comforts | Copy branch or log, persisted filter and toggles, notifications on completion, `Escape` closes a confirmation or the log. |
+| Notes | A per job note thread kept beside the state, for handoffs and reminders. |
+| Metrics | Board totals: jobs, passed and failed counts, tokens, cache share. |
+| Log controls | Search the tail, choose 200, 500 or 1000 lines, follow or freeze, download as a file, and lines with PASS or FAIL are toned. |
 
 ## Install
 
@@ -121,6 +124,7 @@ connection:
 |---|---|---|
 | `/api/taskboard/state` | GET | Snapshot. `?removed=1` includes archived jobs. |
 | `/api/taskboard/events` | GET | Server sent event stream, one snapshot frame every three seconds. |
+| `/api/taskboard/notes` | GET, POST | Notes for a job. `?id=A` reads them; a POST with `{ id, text }` appends one. |
 | `/api/taskboard/log` | GET | `?id=A&lines=200`, the tail of the agent log. |
 | `/api/taskboard/action` | POST | `{ "id": "A", "action": "start" }` with actions `start`, `stop`, `restart`, `remove`, `restore`. |
 

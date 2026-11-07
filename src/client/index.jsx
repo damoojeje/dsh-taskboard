@@ -109,6 +109,14 @@ const styles = {
   logBox: { margin: 0, maxHeight: '220px', overflow: 'auto', padding: '8px 9px', borderRadius: '8px', background: 'rgba(0, 0, 0, 0.22)', border: '1px solid rgba(128, 128, 128, 0.18)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '10.5px', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'inherit' },
   notice: { fontSize: '11px', lineHeight: 1.4 },
   banner: { fontSize: '11px', lineHeight: 1.4, color: '#e8590c' },
+  summary: { display: 'flex', flexWrap: 'wrap', gap: '10px', fontSize: '11px', opacity: 0.72, fontVariantNumeric: 'tabular-nums' },
+  summaryItem: { whiteSpace: 'nowrap' },
+  logTools: { display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' },
+  logSearch: { flex: '1 1 120px', minWidth: '100px', padding: '3px 7px', borderRadius: '6px', border: '1px solid rgba(128, 128, 128, 0.35)', background: 'transparent', color: 'inherit', font: 'inherit', fontSize: '11px' },
+  logLine: { whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+  notes: { display: 'flex', flexDirection: 'column', gap: '6px', padding: '8px 9px', borderRadius: '8px', border: '1px solid rgba(128, 128, 128, 0.18)', background: 'rgba(128, 128, 128, 0.04)' },
+  noteLine: { fontSize: '11px', lineHeight: 1.45, whiteSpace: 'pre-wrap' },
+  noteArea: { width: '100%', minHeight: '48px', resize: 'vertical', padding: '6px 8px', borderRadius: '7px', border: '1px solid rgba(128, 128, 128, 0.35)', background: 'transparent', color: 'inherit', font: 'inherit', fontSize: '11.5px' },
 }
 
 function ActionButton({ label, onClick, disabled, tone }) {
@@ -120,23 +128,92 @@ function ActionButton({ label, onClick, disabled, tone }) {
   )
 }
 
-function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onConfirm, onCancel, onCopy }) {
+function logLinesOf(text, query) {
+  const lines = (text || '').split('\n')
+  const needle = (query || '').trim().toLowerCase()
+  const filtered = needle ? lines.filter((line) => line.toLowerCase().includes(needle)) : lines
+  return filtered.slice(-2000)
+}
+
+function logTone(line) {
+  if (/FAIL|error|Error|refused|Exception/.test(line)) return '#c92a2a'
+  if (/PASS/.test(line)) return '#2f9e44'
+  return undefined
+}
+
+function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onConfirm, onCancel, onCopy, logLines, setLogLines }) {
   const phase = PHASES[task.phase] || { label: task.phase, tone: '#868e96' }
   const finished = task.phase === 'done' || task.phase === 'failed' || task.phase === 'capped'
   const percent = task.cap > 0 ? task.percent : 0
   const verdict = task.accept === 'pass' ? 'pass' : task.accept === 'fail' ? 'fail' : null
   const canStart = !task.running && task.phase !== 'running'
   const logRef = useRef(null)
+  const [notesOpen, setNotesOpen] = useState(false)
+  const [notes, setNotes] = useState([])
+  const [noteText, setNoteText] = useState('')
+  const [noteBusy, setNoteBusy] = useState(false)
+  const [logQuery, setLogQuery] = useState('')
+  const [follow, setFollow] = useState(true)
 
   useEffect(() => {
     if (open && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [open, log.text])
 
+  useEffect(() => {
+    if (open && follow && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [open, follow, log.text])
+
+  const loadNotes = async () => {
+    try {
+      const response = await fetch(`/api/taskboard/notes?id=${encodeURIComponent(task.id)}`, { credentials: 'same-origin', cache: 'no-store' })
+      const data = await response.json()
+      setNotes(Array.isArray(data.notes) ? data.notes : [])
+    } catch {
+      setNotes([])
+    }
+  }
+
+  useEffect(() => {
+    if (notesOpen) loadNotes()
+  }, [notesOpen])
+
+  const saveNote = async () => {
+    const text = noteText.trim()
+    if (!text || noteBusy) return
+    setNoteBusy(true)
+    try {
+      await fetch('/api/taskboard/notes', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json', 'x-taskboard': '1' },
+        body: JSON.stringify({ id: task.id, text }),
+      })
+      setNoteText('')
+      await loadNotes()
+    } finally {
+      setNoteBusy(false)
+    }
+  }
+
+  const downloadLog = () => {
+    try {
+      const blob = new Blob([log.text || ''], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${task.id}.log`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      // A blocked download leaves the log visible.
+    }
+  }
+
   const confirmation = (() => {
     if (!pending) return ''
     if (pending.action === 'stop') return 'The agent is terminated.'
     if (pending.action === 'remove') return 'Its state is archived and hidden; the task definition and logs stay.'
-    if (pending.action === 'purge') return 'Deletes the job for good: state, archive, logs and its place in the task list. Cannot be undone.'
+    if (pending.action === 'purge') return task.running ? 'Stops the agent, then deletes the job for good: state, archive, logs and its place in the task list. Cannot be undone.' : 'Deletes the job for good: state, archive, logs and its place in the task list. Cannot be undone.'
     if (pending.action === 'forget') return 'Drops the task definition; logs stay unless you delete first.'
     if (pending.action === 'restore') return 'It comes back on the board with its last archived state.'
     return `It runs against a ${tokens(task.cap)} token cap.`
@@ -208,6 +285,8 @@ function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onCo
             <ActionButton label="Stop" tone="danger" onClick={() => onAsk(task.id, 'stop')} disabled={acting} />
           </>
         )}
+        {!task.removed ? <ActionButton label="Delete" tone="danger" onClick={() => onAsk(task.id, 'purge')} disabled={acting} /> : null}
+        <ActionButton label={notesOpen ? 'Hide notes' : `Notes${notes.length ? ` (${notes.length})` : ''}`} onClick={() => setNotesOpen((value) => !value)} />
         {task.branch ? <ActionButton label="Copy branch" onClick={() => onCopy(task.branch)} /> : null}
         {open ? <ActionButton label="Copy log" onClick={() => onCopy(log.text)} /> : null}
       </div>
@@ -225,15 +304,64 @@ function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onCo
       {task.notice ? <span style={{ ...styles.notice, color: task.notice.ok ? '#2f9e44' : '#c92a2a' }}>{task.notice.text}</span> : null}
 
       {open ? (
-        <div id={`taskboard-log-${task.id}`}>
+        <div id={`taskboard-log-${task.id}`} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <div style={styles.logTools}>
+            <input
+              style={styles.logSearch}
+              type="search"
+              placeholder="Search the log"
+              value={logQuery}
+              onChange={(event) => setLogQuery(event.target.value)}
+              aria-label={`Search the ${task.id} log`}
+            />
+            <select
+              value={logLines}
+              onChange={(event) => setLogLines(Number(event.target.value))}
+              aria-label="Log lines"
+              style={{ ...styles.button, padding: '3px 6px' }}
+            >
+              <option value={200}>200 lines</option>
+              <option value={500}>500 lines</option>
+              <option value={1000}>1000 lines</option>
+            </select>
+            <ActionButton label={follow ? 'Following' : 'Follow'} onClick={() => setFollow((value) => !value)} />
+            <ActionButton label="Download" onClick={downloadLog} />
+          </div>
           {log.missing ? (
             <span style={styles.meta}>No log yet. The runner writes one once the agent starts.</span>
           ) : (
-            <pre style={styles.logBox} ref={logRef}>
-              {log.text || 'empty'}
-            </pre>
+            <div style={styles.logBox} ref={logRef} role="log" aria-label={`${task.id} log`}>
+              {logLinesOf(log.text, logQuery).map((line, index) => (
+                <div key={index} style={{ ...styles.logLine, color: logTone(line) }}>
+                  {line === '' ? ' ' : line}
+                </div>
+              ))}
+            </div>
           )}
           {log.truncated ? <span style={styles.meta}>Showing the tail only.</span> : null}
+        </div>
+      ) : null}
+
+      {notesOpen ? (
+        <div style={styles.notes}>
+          {notes.length === 0 ? <span style={styles.meta}>No notes yet. Notes are kept beside the job state.</span> : null}
+          {notes.map((note, index) => (
+            <span style={styles.noteLine} key={`${note.at || 'note'}-${index}`}>
+              {note.at ? `${clock(note.at)} ` : ''}
+              {note.text}
+            </span>
+          ))}
+          <textarea
+            style={styles.noteArea}
+            placeholder="Add a note for the next person, or a reminder for yourself"
+            value={noteText}
+            onChange={(event) => setNoteText(event.target.value)}
+            aria-label={`Note for ${task.id}`}
+          />
+          <div style={styles.row}>
+            <ActionButton label={noteBusy ? 'Saving' : 'Save note'} tone="primary" onClick={saveNote} disabled={noteBusy || !noteText.trim()} />
+            <span style={styles.meta}>{noteText.length}/2000</span>
+          </div>
         </div>
       ) : null}
     </div>
@@ -250,6 +378,7 @@ export function TaskPanel() {
   const [notify, setNotify] = useState(() => readPref('notify', false))
   const [openId, setOpenId] = useState(() => readPref('openId', null))
   const [log, setLog] = useState({ text: '', truncated: false, missing: false })
+  const [logLines, setLogLines] = useState(() => readPref('logLines', 200))
   const [pending, setPending] = useState(null)
   const [acting, setActing] = useState(false)
   const [notices, setNotices] = useState({})
@@ -262,6 +391,7 @@ export function TaskPanel() {
   useEffect(() => { writePref('finishedOpen', finishedOpen) }, [finishedOpen])
   useEffect(() => { writePref('notify', notify); notifyRef.current = notify }, [notify])
   useEffect(() => { writePref('openId', openId) }, [openId])
+  useEffect(() => { writePref('logLines', logLines) }, [logLines])
 
   // Snapshot stream with a polling fallback.
   useEffect(() => {
@@ -366,7 +496,7 @@ export function TaskPanel() {
     const load = async () => {
       if (document.hidden) return
       try {
-        const response = await fetch(`/api/taskboard/log?id=${encodeURIComponent(openId)}&lines=200`, { credentials: 'same-origin', cache: 'no-store' })
+        const response = await fetch(`/api/taskboard/log?id=${encodeURIComponent(openId)}&lines=${logLines}`, { credentials: 'same-origin', cache: 'no-store' })
         const data = await response.json()
         if (active) setLog({ text: data.text || '', truncated: !!data.truncated, missing: !!data.missing })
       } catch {
@@ -379,7 +509,7 @@ export function TaskPanel() {
       active = false
       window.clearInterval(timer)
     }
-  }, [openId])
+  }, [openId, logLines])
 
   // Escape closes a confirmation first, then the log.
   useEffect(() => {
@@ -455,6 +585,8 @@ export function TaskPanel() {
       onConfirm={(id, action) => send(action, id)}
       onCancel={() => setPending(null)}
       onCopy={(text) => copyText(text).then((ok) => { if (!ok) flash('copy', false, 'copy failed') })}
+      logLines={logLines}
+      setLogLines={setLogLines}
     />
   )
 
@@ -467,6 +599,15 @@ export function TaskPanel() {
         </span>
       </div>
 
+      {snapshot.metrics ? (
+        <div style={styles.summary}>
+          <span style={styles.summaryItem}>{snapshot.metrics.jobs} jobs</span>
+          <span style={styles.summaryItem}>{snapshot.metrics.acceptPass} passed</span>
+          <span style={styles.summaryItem}>{snapshot.metrics.acceptFail} failed</span>
+          <span style={styles.summaryItem}>{tokens(snapshot.metrics.tokensIn + snapshot.metrics.tokensOut)} tokens</span>
+          <span style={styles.summaryItem}>{snapshot.metrics.cacheRead ? `${Math.round((snapshot.metrics.cacheRead / Math.max(1, snapshot.metrics.tokensIn + snapshot.metrics.tokensOut + snapshot.metrics.cacheRead)) * 100)}% cache` : 'no cache reads'}</span>
+        </div>
+      ) : null}
       {snapshot.warnings && snapshot.warnings.length > 0 ? <span style={styles.banner}>{snapshot.warnings.join('; ')}</span> : null}
       {error ? <div style={styles.error}>status unavailable: {error}</div> : null}
       {notices.action || notices.copy || notices.notify ? (
