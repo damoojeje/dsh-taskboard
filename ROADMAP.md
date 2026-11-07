@@ -11,7 +11,7 @@ until it lands in a release.
 | 0.1 | Board with phase, elapsed, token budget, branch, last commit, acceptance |
 | 0.2 | Live log tail, start, stop, restart, with confirmations and guards |
 | 0.3 | Remove as archive, show removed, restore |
-| 0.4 | Real delete (purge), forget the definition, tests, CI, project layout |
+| 0.4.1 | Real delete (purge removes the job and its definition), forget, tests, CI, project layout |
 
 ## Next
 
