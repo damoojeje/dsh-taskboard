@@ -100,7 +100,7 @@ check('stalled job reads as stalled', brief(await board()).includes('R:stalled')
 check('done job reads as removable', brief(await board()).includes('T:done:removable'))
 
 check('action needs the header', (await act('remove', 'T', {})).status === 403)
-check('bad id is refused', (await act('remove', 'ZZ')).status === 400)
+check('bad id is refused', (await act('remove', 'z')).status === 400)
 check('stalled job is removable', (await act('remove', 'R')).body.ok === true)
 check('done job is removable', (await act('remove', 'T')).body.ok === true)
 const removed = brief(await board('?removed=1'))
@@ -152,7 +152,7 @@ check('archived job is hidden by default', !brief(await board()).includes('S:'))
 const withBad = JSON.parse(await readFile(tasks, 'utf8'))
 withBad.tasks['bad id'] = { title: 'invalid' }
 await writeFile(tasks, JSON.stringify(withBad))
-check('validation warns about a bad id', (await board()).warnings.some((w) => w.includes('single capital letter')))
+check('validation warns about a bad id', (await board()).warnings.some((w) => w.includes('bad id') && w.includes('skipped')))
 delete withBad.tasks['bad id']
 await writeFile(tasks, JSON.stringify(withBad))
 
@@ -190,6 +190,17 @@ check('delete a running job stops it first', runningDelete.body.ok === true && r
 check('running delete removes state, notes and definition', !(await exists(join(state, 'S.json'))) && !(await exists(join(state, 'S.notes.jsonl'))) && !(await readFile(tasks, 'utf8')).includes('"S"'))
 const metrics = (await board()).metrics
 check('snapshot carries metrics', metrics && typeof metrics.tokensIn === 'number' && typeof metrics.jobs === 'number')
+
+// Multi-character ids, the shape the runner has used since G2 and K1.
+const multi = JSON.parse(await readFile(tasks, 'utf8'))
+multi.tasks.K1 = { name: 'k1', branch: 'dsh/k1', token_cap: 1000, wall_s: 60, title: 'multi letter id' }
+await writeFile(tasks, JSON.stringify(multi))
+await writeFile(join(state, 'K1.json'), JSON.stringify({ state: 'done', accept: 'pass', title: 'multi letter id', branch: 'dsh/k1', token_cap: 1000, wall_s: 60, tokens_in: 10, tokens_out: 5 }))
+const multiBoard = await board()
+check('a multi-character id is listed', multiBoard.tasks.some((t) => t.id === 'K1'))
+check('a multi-character id opens its log route', (await call('/api/taskboard/log?id=K1', 'GET')).status === 200)
+check('a lowercase id is refused', (await act('start', 'k1')).status === 400)
+check('an over-long id is refused', (await act('start', 'ABCDEFGHIJ')).status === 400)
 
 const page = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
 let entry = null

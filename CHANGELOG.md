@@ -4,6 +4,14 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] 2026-11-08
+
+### Fixed
+
+- The panel only accepted single-letter task ids, so `G2` and `K1` to `K4` were skipped with
+  a warning and never appeared. An id is now a capital letter followed by up to seven
+  capital letters or digits, which still cannot escape the state directory.
+
 ## [0.6.1] 2026-11-08
 
 ### Fixed

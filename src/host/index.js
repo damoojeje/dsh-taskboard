@@ -33,6 +33,9 @@ function firstExisting(candidates) {
 }
 
 const STATE_DIR = process.env.TASKBOARD_STATE || join(HOME, '.dsh', 'tasks')
+// A task id is a capital letter plus up to seven capital letters or digits, so G2 and K12
+// are valid. It is still a safe filename component and cannot escape the state directory.
+const ID_RE = /^[A-Z][A-Z0-9]{0,7}$/
 const TASKS_FILE =
   process.env.TASKBOARD_TASKS ||
   firstExisting([
@@ -80,8 +83,8 @@ async function taskDefs() {
   }
   const defs = {}
   for (const [id, def] of Object.entries(config.tasks)) {
-    if (!/^[A-Z]$/.test(id)) {
-      warnings.push(`task id ${JSON.stringify(id)} is not a single capital letter, skipped`)
+    if (!ID_RE.test(id)) {
+      warnings.push(`task id ${JSON.stringify(id)} is not a capital letter followed by up to seven capital letters or digits, skipped`)
       continue
     }
     if (!def || typeof def !== 'object') {
@@ -721,7 +724,7 @@ export function apply(ctx) {
         }
         if (request.method === 'GET') {
           const id = new URL(request.url).searchParams.get('id') || ''
-          if (!/^[A-Z]$/.test(id)) return jsonResponse({ error: 'bad id' }, 400)
+          if (!ID_RE.test(id)) return jsonResponse({ error: 'bad id' }, 400)
           return jsonResponse({ id, notes: await readNotes(id) })
         }
         let body = null
@@ -731,7 +734,7 @@ export function apply(ctx) {
           return jsonResponse({ ok: false, message: 'body is not JSON' }, 400)
         }
         const id = body && typeof body.id === 'string' ? body.id : ''
-        if (!/^[A-Z]$/.test(id)) return jsonResponse({ ok: false, message: 'bad id' }, 400)
+        if (!ID_RE.test(id)) return jsonResponse({ ok: false, message: 'bad id' }, 400)
         return jsonResponse(await addNote(id, body && body.text))
       },
     },
@@ -742,7 +745,7 @@ export function apply(ctx) {
       fetch: async (request) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('id') || ''
-        if (!/^[A-Z]$/.test(id)) return jsonResponse({ error: 'bad id' }, 400)
+        if (!ID_RE.test(id)) return jsonResponse({ error: 'bad id' }, 400)
         const lines = Number(url.searchParams.get('lines')) || 200
         const result = await readTail(join(STATE_DIR, `${id}.log`), lines)
         return jsonResponse({ id, ...result })
@@ -767,7 +770,7 @@ export function apply(ctx) {
         try {
           if (action === 'stop-all') return jsonResponse(await stopAll())
           if (action === 'prune-finished') return jsonResponse(await pruneFinished())
-          if (!/^[A-Z]$/.test(id)) return jsonResponse({ ok: false, message: 'bad id' }, 400)
+          if (!ID_RE.test(id)) return jsonResponse({ ok: false, message: 'bad id' }, 400)
           if (action === 'stop') return jsonResponse(await stopTask(id))
           if (action === 'start' || action === 'restart') return jsonResponse(await startTask(id, action))
           if (action === 'remove') return jsonResponse(await removeTask(id))
