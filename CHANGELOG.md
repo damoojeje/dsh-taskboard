@@ -4,6 +4,14 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] 2026-11-08
+
+### Fixed
+
+- Opening a log on a laptop or a wall display grew the card downward below the fold, so
+  the click looked like it did nothing. The log now scrolls into view once its content
+  arrives, and the box is taller.
+
 ## [0.6.0] 2026-11-07
 
 ### Added

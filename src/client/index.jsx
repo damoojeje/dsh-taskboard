@@ -106,7 +106,7 @@ const styles = {
   button: { appearance: 'none', border: '1px solid rgba(128, 128, 128, 0.35)', background: 'transparent', color: 'inherit', borderRadius: '7px', padding: '3px 9px', fontSize: '11px', fontWeight: 550, cursor: 'pointer', font: 'inherit' },
   buttonPrimary: { borderColor: 'currentColor', fontWeight: 650 },
   buttonDanger: { borderColor: '#c92a2a', color: '#c92a2a' },
-  logBox: { margin: 0, maxHeight: '220px', overflow: 'auto', padding: '8px 9px', borderRadius: '8px', background: 'rgba(0, 0, 0, 0.22)', border: '1px solid rgba(128, 128, 128, 0.18)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '10.5px', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'inherit' },
+  logBox: { margin: 0, maxHeight: '320px', overflow: 'auto', padding: '8px 9px', borderRadius: '8px', background: 'rgba(0, 0, 0, 0.22)', border: '1px solid rgba(128, 128, 128, 0.18)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '10.5px', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'inherit' },
   notice: { fontSize: '11px', lineHeight: 1.4 },
   banner: { fontSize: '11px', lineHeight: 1.4, color: '#e8590c' },
   summary: { display: 'flex', flexWrap: 'wrap', gap: '10px', fontSize: '11px', opacity: 0.72, fontVariantNumeric: 'tabular-nums' },
@@ -157,6 +157,17 @@ function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onCo
 
   useEffect(() => {
     if (open && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [open, log.text])
+
+  // A log opens below the fold on a laptop and a wall display. Scroll it into view once,
+  // after its content arrives, so opening it never looks like a click that did nothing.
+  const scrolledRef = useRef(false)
+  useEffect(() => {
+    if (!open) { scrolledRef.current = false; return }
+    if (log.text && !scrolledRef.current && logRef.current) {
+      logRef.current.scrollIntoView({ block: 'nearest' })
+      scrolledRef.current = true
+    }
   }, [open, log.text])
 
   useEffect(() => {
