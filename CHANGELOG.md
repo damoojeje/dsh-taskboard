@@ -4,6 +4,24 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] 2026-11-08
+
+### Fixed
+
+- A poll response and a live event could cross in flight and the older snapshot could
+  land last, so a card could flicker back to the state before an action. Snapshots older
+  than the last applied `updatedAt` are ignored.
+- Polling kept running after the event stream reconnected. The stream opening now clears
+  the poll timer.
+- The event stream's interval survived a dropped connection when the stream was not
+  cancelled cleanly. It now stops on an abort signal and when enqueue fails, while a
+  failed snapshot still leaves the stream open.
+- The log view treated any response as content; a server error is now an error state.
+
+### Tests
+
+- The log line parameter is clamped: a 99,999 line request returns at most 1,000 lines.
+
 ## [0.6.2] 2026-11-08
 
 ### Fixed

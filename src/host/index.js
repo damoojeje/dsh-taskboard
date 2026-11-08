@@ -685,24 +685,38 @@ export function apply(ctx) {
       path: '/api/taskboard/events',
       methods: ['GET'],
       requestBody: 'buffered',
-      fetch: async () => {
+      fetch: async (request) => {
         const encoder = new TextEncoder()
         let timer = null
+        let closed = false
+        const stopTimer = () => {
+          closed = true
+          if (timer) { clearInterval(timer); timer = null }
+        }
         const stream = new ReadableStream({
           start(controller) {
             const send = async () => {
+              if (closed) return
+              let payload = null
               try {
-                const payload = await snapshot(true)
+                payload = await snapshot(true)
+              } catch {
+                // A failed snapshot is transient; the next frame may succeed.
+                return
+              }
+              try {
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`))
               } catch {
-                // A failed snapshot must not tear down the stream.
+                // The stream is closed, so the interval must stop.
+                stopTimer()
               }
             }
             send()
             timer = setInterval(send, 3000)
+            if (request.signal) request.signal.addEventListener('abort', stopTimer, { once: true })
           },
           cancel() {
-            if (timer) clearInterval(timer)
+            stopTimer()
           },
         })
         return new Response(stream, {

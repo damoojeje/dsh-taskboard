@@ -1,6 +1,6 @@
 {
   "name": "dsh-taskboard",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Sidebar panel for headless dispatches in DeepSeek Harness: live state, log tail, start, stop, restart, and archive finished jobs",
   "type": "module",
   "main": "src/host/index.js",

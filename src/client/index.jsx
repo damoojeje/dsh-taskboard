@@ -395,6 +395,7 @@ export function TaskPanel() {
   const [notices, setNotices] = useState({})
   const [freshIds, setFreshIds] = useState([])
   const previous = useRef({})
+  const lastUpdated = useRef(0)
   const notifyRef = useRef(notify)
 
   useEffect(() => { writePref('filter', filter) }, [filter])
@@ -412,6 +413,11 @@ export function TaskPanel() {
 
     const apply = (data) => {
       if (closed) return
+      // A poll response and an SSE frame can cross in flight. Ignore a snapshot older than
+      // the last one applied, so the panel never flickers back to the state before an action.
+      const stamp = Date.parse(data.updatedAt || '') || 0
+      if (stamp && stamp < lastUpdated.current) return
+      if (stamp) lastUpdated.current = stamp
       const next = {}
       const fresh = []
       for (const task of data.tasks || []) {
@@ -462,7 +468,11 @@ export function TaskPanel() {
       }
       try {
         source = new window.EventSource('/api/taskboard/events')
-        source.onopen = () => { if (!closed) setMode('live') }
+        source.onopen = () => {
+          if (closed) return
+          if (timer) { window.clearInterval(timer); timer = null }
+          setMode('live')
+        }
         source.onmessage = (event) => {
           try {
             apply(JSON.parse(event.data))
@@ -508,6 +518,7 @@ export function TaskPanel() {
       if (document.hidden) return
       try {
         const response = await fetch(`/api/taskboard/log?id=${encodeURIComponent(openId)}&lines=${logLines}`, { credentials: 'same-origin', cache: 'no-store' })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const data = await response.json()
         if (active) setLog({ text: data.text || '', truncated: !!data.truncated, missing: !!data.missing })
       } catch {
