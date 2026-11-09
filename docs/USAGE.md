@@ -69,6 +69,16 @@ them.
 `Start` on a finished job runs it again. `Restart` stops a running job and starts it
 again in one step, with no gap in the card.
 
+## Admin tools
+
+- `Lint tasks`, next to the archive control, runs the task linter and prints the result.
+  It is the same check the runner applies before a task starts.
+- `Checks` on a card opens its admin panel: the worktree path with a copy button, the
+  acceptance log, and `Re-run acceptance`.
+- `Re-run acceptance` starts `dsh-run.py accept <ID>` detached. It tests the committed
+  HEAD, waits for the acceptance lock, and the card shows the new verdict when it lands.
+  It refuses while the task is running.
+
 ## Actions and their confirmations
 
 Every action asks once before it does anything. The confirmation names the cost or the

@@ -23,6 +23,7 @@ a status script. This puts that window in the sidebar.
 | Diagnostics | Warns when a running job stops updating its state file, and shows the token rate and an estimate to the cap. |
 | Batch | Stop all running jobs, or archive every finished job, each behind one confirmation. |
 | Comforts | Copy branch or log, persisted filter and toggles, notifications on completion, `Escape` closes a confirmation or the log. |
+| Admin | Lint the task list, read a task's acceptance log, re-run its acceptance, and copy the worktree path. |
 | Notes | A per job note thread kept beside the state, for handoffs and reminders. |
 | Metrics | Board totals: jobs, passed and failed counts, tokens, cache share. |
 | Log controls | Search the tail, choose 200, 500 or 1000 lines, follow or freeze, download as a file, and lines with PASS or FAIL are toned. |
@@ -126,7 +127,8 @@ connection:
 | `/api/taskboard/events` | GET | Server sent event stream, one snapshot frame every three seconds. |
 | `/api/taskboard/notes` | GET, POST | Notes for a job. `?id=A` reads them; a POST with `{ id, text }` appends one. |
 | `/api/taskboard/log` | GET | `?id=A&lines=200`, the tail of the agent log. |
-| `/api/taskboard/action` | POST | `{ "id": "A", "action": "start" }` with actions `start`, `stop`, `restart`, `remove`, `restore`. |
+| `/api/taskboard/accept-log` | GET | `?id=A&lines=200`, the tail of the acceptance log. |
+| `/api/taskboard/action` | POST | `{ "id": "A", "action": "start" }` with actions `start`, `stop`, `restart`, `remove`, `restore`, `purge`, `forget`, `accept`, `lint`, `stop-all`, `prune-finished`. |
 
 Mutating calls must carry `x-taskboard: 1`. A cross-site page cannot set that header
 without a preflight the API fence does not grant, which makes a drive-by request from

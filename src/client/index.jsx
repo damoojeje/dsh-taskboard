@@ -152,6 +152,25 @@ function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onCo
   const [notes, setNotes] = useState([])
   const [noteText, setNoteText] = useState('')
   const [noteBusy, setNoteBusy] = useState(false)
+  const [adminOpen, setAdminOpen] = useState(false)
+  const [adminLog, setAdminLog] = useState({ text: '', missing: false })
+
+  const loadAcceptLog = async () => {
+    try {
+      const response = await fetch(`/api/taskboard/accept-log?id=${encodeURIComponent(task.id)}&lines=200`, { credentials: 'same-origin', cache: 'no-store' })
+      const data = await response.json()
+      setAdminLog({ text: data.text || '', missing: !!data.missing })
+    } catch {
+      setAdminLog({ text: '', missing: true })
+    }
+  }
+
+  const toggleAdmin = () => {
+    setAdminOpen((value) => {
+      if (!value) loadAcceptLog()
+      return !value
+    })
+  }
   const [logQuery, setLogQuery] = useState('')
   const [follow, setFollow] = useState(true)
 
@@ -224,6 +243,7 @@ function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onCo
     if (!pending) return ''
     if (pending.action === 'stop') return 'The agent is terminated.'
     if (pending.action === 'remove') return 'Its state is archived and hidden; the task definition and logs stay.'
+    if (pending.action === 'accept') return 'Re-runs the acceptance from the committed HEAD. It waits for the acceptance lock, and the card shows the result when it lands.'
     if (pending.action === 'purge') return task.running ? 'Stops the agent, then deletes the job for good: state, archive, logs and its place in the task list. Cannot be undone.' : 'Deletes the job for good: state, archive, logs and its place in the task list. Cannot be undone.'
     if (pending.action === 'forget') return 'Drops the task definition; logs stay unless you delete first.'
     if (pending.action === 'restore') return 'It comes back on the board with its last archived state.'
@@ -297,6 +317,7 @@ function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onCo
           </>
         )}
         {!task.removed ? <ActionButton label="Delete" tone="danger" onClick={() => onAsk(task.id, 'purge')} disabled={acting} /> : null}
+        <ActionButton label={adminOpen ? 'Hide checks' : 'Checks'} onClick={toggleAdmin} />
         <ActionButton label={notesOpen ? 'Hide notes' : `Notes${notes.length ? ` (${notes.length})` : ''}`} onClick={() => setNotesOpen((value) => !value)} />
         {task.branch ? <ActionButton label="Copy branch" onClick={() => onCopy(task.branch)} /> : null}
         {open ? <ActionButton label="Copy log" onClick={() => onCopy(log.text)} /> : null}
@@ -353,6 +374,24 @@ function TaskCard({ task, fresh, open, log, pending, acting, onOpen, onAsk, onCo
         </div>
       ) : null}
 
+      {adminOpen ? (
+        <div style={styles.notes}>
+          <span style={styles.meta}>{task.worktree ? `worktree ${task.worktree}` : 'no worktree yet'}</span>
+          <div style={styles.row}>
+            {task.worktree ? <ActionButton label="Copy worktree" onClick={() => onCopy(task.worktree)} /> : null}
+            <ActionButton label="Re-run acceptance" tone="primary" onClick={() => onAsk(task.id, 'accept')} disabled={acting || task.running} />
+            <span style={styles.meta}>{task.accept ? `last verdict: ${task.accept}` : 'no acceptance yet'}</span>
+          </div>
+          {adminLog.missing ? <span style={styles.meta}>No acceptance log yet.</span> : (
+            <div style={styles.logBox} role="log" aria-label={`${task.id} acceptance log`}>
+              {logLinesOf(adminLog.text, '').map((line, index) => (
+                <div key={index} style={{ ...styles.logLine, color: logTone(line) }}>{line === '' ? ' ' : line}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+
       {notesOpen ? (
         <div style={styles.notes}>
           {notes.length === 0 ? <span style={styles.meta}>No notes yet. Notes are kept beside the job state.</span> : null}
@@ -390,6 +429,8 @@ export function TaskPanel() {
   const [openId, setOpenId] = useState(() => readPref('openId', null))
   const [log, setLog] = useState({ text: '', truncated: false, missing: false })
   const [logLines, setLogLines] = useState(() => readPref('logLines', 200))
+  const [lintResult, setLintResult] = useState(null)
+  const [lintBusy, setLintBusy] = useState(false)
   const [pending, setPending] = useState(null)
   const [acting, setActing] = useState(false)
   const [notices, setNotices] = useState({})
@@ -574,6 +615,24 @@ export function TaskPanel() {
     }
   }
 
+  const runLint = async () => {
+    if (lintBusy) return
+    setLintBusy(true)
+    try {
+      const response = await fetch('/api/taskboard/action', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json', 'x-taskboard': '1' },
+        body: JSON.stringify({ action: 'lint' }),
+      })
+      setLintResult(await response.json())
+    } catch (error) {
+      setLintResult({ ok: false, message: 'lint failed', output: String((error && error.message) || error) })
+    } finally {
+      setLintBusy(false)
+    }
+  }
+
   const enableNotifications = async () => {
     if (typeof Notification === 'undefined') { flash('notify', false, 'notifications are not available here'); return }
     let permission = Notification.permission
@@ -650,6 +709,7 @@ export function TaskPanel() {
       </div>
 
       <div style={styles.controls}>
+        <ActionButton label={lintBusy ? 'Linting' : 'Lint tasks'} onClick={runLint} disabled={lintBusy} />
         {runningCount > 0 ? <ActionButton label={`Stop all (${runningCount})`} tone="danger" onClick={() => setPending({ id: null, action: 'stop-all' })} disabled={acting} /> : null}
         {finished.filter((task) => !task.removed).length > 0 ? (
           <ActionButton label={`Archive finished (${finished.filter((task) => !task.removed).length})`} onClick={() => setPending({ id: null, action: 'prune-finished' })} disabled={acting} />
@@ -659,6 +719,16 @@ export function TaskPanel() {
         ) : null}
         <ActionButton label={notify ? 'Notifications on' : 'Notify me'} onClick={enableNotifications} />
       </div>
+
+      {lintResult ? (
+        <div style={styles.notes} role="status">
+          <div style={styles.row}>
+            <span style={styles.meta}>{lintResult.ok ? 'lint clean' : 'lint findings'}</span>
+            <ActionButton label="Dismiss" onClick={() => setLintResult(null)} />
+          </div>
+          <pre style={styles.logBox}>{lintResult.output || lintResult.message || 'no output'}</pre>
+        </div>
+      ) : null}
 
       {pending && pending.id === null ? (
         <div style={styles.row} role="alertdialog" aria-label={`Confirm ${pending.action}`}>

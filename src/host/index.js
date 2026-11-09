@@ -11,7 +11,7 @@
 
 import { existsSync } from 'node:fs'
 import { readFile, readdir, rename, mkdir, stat, unlink, writeFile, open } from 'node:fs/promises'
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -48,6 +48,8 @@ const RUNNER =
     join(HOME, '.dsh', 'bin', 'dsh-run.py'),
     join(HOME, 'context_master', 'plans', 'dsh-run.py'),
   ])
+
+const LINT = process.env.TASKBOARD_LINT || join(HOME, 'context_master', 'plans', 'dsh-task-lint.py')
 const RUNNER_CWD = dirname(RUNNER)
 const ARCHIVE_DIR = join(STATE_DIR, 'archive')
 const DISMISSED_FILE = join(STATE_DIR, 'dismissed.json')
@@ -598,6 +600,44 @@ async function addNote(id, text) {
   return { ok: true, message: 'note saved', notes: await readNotes(id) }
 }
 
+/** Re-run the acceptance for a finished task, detached, under the runner's lock. */
+async function acceptTask(id) {
+  const { defs } = await taskDefs()
+  if (!Object.prototype.hasOwnProperty.call(defs, id)) {
+    return { ok: false, message: `unknown task ${id}` }
+  }
+  const state = await readJson(join(STATE_DIR, `${id}.json`), {})
+  if (state.pid && alive(state.pid) && state.state === 'running') {
+    return { ok: false, message: `${id} is running; stop it before re-checking acceptance` }
+  }
+  let logHandle = null
+  try {
+    logHandle = await open(join(STATE_DIR, `${id}.runner.log`), 'a')
+  } catch {
+    logHandle = null
+  }
+  const child = spawn('setsid', ['python3', RUNNER, 'accept', id], {
+    cwd: RUNNER_CWD,
+    detached: true,
+    stdio: ['ignore', logHandle ? logHandle.fd : 'ignore', logHandle ? logHandle.fd : 'ignore'],
+  })
+  child.unref()
+  if (logHandle) await logHandle.close().catch(() => {})
+  return { ok: true, message: `acceptance started for ${id}; it waits for the acceptance lock` }
+}
+
+/** Run the task linter. Synchronous because it answers in milliseconds. */
+function lintTasks(id) {
+  const args = id ? [LINT, id] : [LINT]
+  try {
+    const output = execFileSync('python3', args, { encoding: 'utf8', timeout: 15000, cwd: HOME })
+    return { ok: true, message: 'lint clean', output: output.trim() }
+  } catch (error) {
+    const output = `${(error && error.stdout) || ''}${(error && error.stderr) || ''}`.trim()
+    return { ok: false, message: 'lint findings', output: output || String((error && error.message) || error) }
+  }
+}
+
 async function forgetTask(id) {
   const { defs } = await taskDefs()
   if (!Object.prototype.hasOwnProperty.call(defs, id)) {
@@ -766,6 +806,19 @@ export function apply(ctx) {
       },
     },
     {
+      path: '/api/taskboard/accept-log',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async (request) => {
+        const url = new URL(request.url)
+        const id = url.searchParams.get('id') || ''
+        if (!ID_RE.test(id)) return jsonResponse({ error: 'bad id' }, 400)
+        const lines = Number(url.searchParams.get('lines')) || 200
+        const result = await readTail(join(STATE_DIR, `${id}.accept.log`), lines)
+        return jsonResponse({ id, ...result })
+      },
+    },
+    {
       path: '/api/taskboard/action',
       methods: ['POST'],
       requestBody: 'buffered',
@@ -782,6 +835,10 @@ export function apply(ctx) {
         const action = body && typeof body.action === 'string' ? body.action : ''
         const id = body && typeof body.id === 'string' ? body.id : ''
         try {
+          if (action === 'lint') {
+            if (id && !ID_RE.test(id)) return jsonResponse({ ok: false, message: 'bad id' }, 400)
+            return jsonResponse(lintTasks(id || null))
+          }
           if (action === 'stop-all') return jsonResponse(await stopAll())
           if (action === 'prune-finished') return jsonResponse(await pruneFinished())
           if (!ID_RE.test(id)) return jsonResponse({ ok: false, message: 'bad id' }, 400)
@@ -790,6 +847,7 @@ export function apply(ctx) {
           if (action === 'remove') return jsonResponse(await removeTask(id))
           if (action === 'restore') return jsonResponse(await restoreTask(id))
           if (action === 'purge') return jsonResponse(await purgeTask(id))
+          if (action === 'accept') return jsonResponse(await acceptTask(id))
           if (action === 'forget') return jsonResponse(await forgetTask(id))
           return jsonResponse({ ok: false, message: `unknown action ${action}` }, 400)
         } catch (error) {

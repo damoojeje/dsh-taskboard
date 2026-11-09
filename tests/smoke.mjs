@@ -44,6 +44,9 @@ await writeFile(
   ].join('\n'),
 )
 
+const lint = join(root, 'fake-lint.py')
+await writeFile(lint, 'import sys\nprint("clean")\n')
+
 const done = {
   state: 'done', accept: 'pass', title: 'done task', token_cap: 1000, wall_s: 60,
   tokens_in: 100, tokens_out: 50, started: '2026-01-01T00:00:00+0000',
@@ -55,6 +58,7 @@ await writeFile(join(state, 'R.json'), JSON.stringify({ ...done, state: 'running
 process.env.TASKBOARD_STATE = state
 process.env.TASKBOARD_TASKS = tasks
 process.env.TASKBOARD_RUNNER = runner
+process.env.TASKBOARD_LINT = lint
 
 const { apply } = await import('../src/host/index.js')
 
@@ -192,6 +196,19 @@ check('delete a running job stops it first', runningDelete.body.ok === true && r
 check('running delete removes state, notes and definition', !(await exists(join(state, 'S.json'))) && !(await exists(join(state, 'S.notes.jsonl'))) && !(await readFile(tasks, 'utf8')).includes('"S"'))
 const metrics = (await board()).metrics
 check('snapshot carries metrics', metrics && typeof metrics.tokensIn === 'number' && typeof metrics.jobs === 'number')
+
+await writeFile(join(state, 'T.accept.log'), 'PASS tsc\nFAIL vitest\n')
+const acceptLog = await call('/api/taskboard/accept-log?id=T', 'GET')
+check('accept log route answers', acceptLog.status === 200 && (acceptLog.body.text || '').includes('FAIL vitest'))
+check('accept log route refuses a bad id', (await call('/api/taskboard/accept-log?id=bad id', 'GET')).status === 400)
+const lintRun = await act('lint')
+check('lint action returns findings', lintRun.body.ok === true && (lintRun.body.output || '').includes('clean'), JSON.stringify(lintRun.body))
+const acceptConfig = JSON.parse(await readFile(tasks, 'utf8'))
+acceptConfig.tasks.V = { name: 'v', branch: 'dsh/v', token_cap: 1000, wall_s: 60, title: 'accept task' }
+await writeFile(tasks, JSON.stringify(acceptConfig))
+await writeFile(join(state, 'V.json'), JSON.stringify(done))
+const acceptRun = await act('accept', 'V')
+check('accept action starts a re-check', acceptRun.body.ok === true, JSON.stringify(acceptRun.body))
 
 // Multi-character ids, the shape the runner has used since G2 and K1.
 const multi = JSON.parse(await readFile(tasks, 'utf8'))

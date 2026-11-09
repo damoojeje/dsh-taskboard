@@ -4,6 +4,17 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] 2026-11-09
+
+### Added
+
+- An admin section on each card, behind `Checks`: the worktree path with a copy button,
+  the acceptance log, and a `Re-run acceptance` action that starts `dsh-run.py accept`.
+- A board level `Lint tasks` button. It runs the task linter and shows its output, so a
+  brief and acceptance mismatch is visible before a task is started.
+- Routes: `GET /api/taskboard/accept-log`; actions `accept` (starts a re-check, detached,
+  under the acceptance lock) and `lint`.
+
 ## [0.6.3] 2026-11-08
 
 ### Fixed
